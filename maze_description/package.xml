@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>maze_description</name>
+  <version>0.1.0</version>
+  <description>URDF/xacro model of the robot (4WD chassis, 2D lidar, IMU, 6-DOF arm), shared by the simulation and the real robot.</description>
+  <maintainer email="rabbynun@todo.todo">rabbynun</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

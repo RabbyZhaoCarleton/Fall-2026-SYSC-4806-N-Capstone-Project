@@ -1,0 +1,12 @@
+# Third-party source packages, pinned to the versions this project was tested with.
+# Fetch them into the workspace with:
+#   cd ~/ros2_ws/src && vcs import < capstone/capstone.repos
+repositories:
+  turtlebot3_simulations:
+    type: git
+    url: https://github.com/ROBOTIS-GIT/turtlebot3_simulations.git
+    version: 4563301
+  m-explore-ros2:
+    type: git
+    url: https://github.com/robo-friends/m-explore-ros2.git
+    version: 326cf8a
