@@ -166,6 +166,19 @@ export MESA_D3D12_DEFAULT_ADAPTER_NAME=\"$CHOSEN_NAME\""
   fi
 fi
 
+# ---------------------------------------------------------------- links open in Windows (WSL only)
+if $IS_WSL; then
+  step "Opening links in the Windows browser"
+  OPENER=/mnt/c/Windows/System32/rundll32.exe
+  if [ -x "$OPENER" ] && command -v gh >/dev/null 2>&1; then
+    # Lets gh open web pages (login, "gh pr view --web", ...) in the Windows default browser.
+    gh config set browser "$OPENER url.dll,FileProtocolHandler"
+    info "GitHub CLI will open links in your Windows browser"
+  else
+    info "skipped (GitHub CLI or $OPENER not found)"
+  fi
+fi
+
 # ---------------------------------------------------------------- ~/.bashrc
 step "Shell setup (~/.bashrc)"
 BEGIN='# >>> capstone setup (managed by setup.sh) >>>'

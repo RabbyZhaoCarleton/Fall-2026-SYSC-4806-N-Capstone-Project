@@ -29,14 +29,15 @@ If you already have WSL, check that you have Ubuntu 24.04 with `wsl -l -v`.
 
 ### 2. Sign in to GitHub inside Ubuntu
 
-The repository is private, so Ubuntu needs your GitHub login. In the **Ubuntu** terminal:
+The repository is private, so Ubuntu needs your GitHub login. In the **Ubuntu** terminal, install the GitHub CLI and tell it how to open your Windows browser. Linux in WSL has no browser of its own, so without the second line the login can't open the GitHub page and fails.
 
 ```bash
 sudo apt update && sudo apt install -y gh git
+gh config set browser "/mnt/c/Windows/System32/rundll32.exe url.dll,FileProtocolHandler"
 gh auth login
 ```
 
-Choose GitHub.com, HTTPS, and "Login with a web browser", then follow the prompts. Then let git use that login:
+Choose GitHub.com, HTTPS, Yes (authenticate Git), and "Login with a web browser". Copy the one-time code it shows, then press Enter. GitHub opens in your Windows browser; paste the code there and approve. Back in the terminal, wait for "Authentication complete". Then let git use that login:
 
 ```bash
 gh auth setup-git
@@ -144,6 +145,8 @@ ros2 topic pub --once /explore/resume std_msgs/msg/Bool "{data: true}"
 **Change the maze:** edit the ASCII drawing in `maze_sim/scripts/make_maze.py` and run it. It writes `maze_sim/worlds/maze.sdf`. Rebuild after adding a new world file.
 
 ## Troubleshooting
+
+**`gh auth login` fails** with "Failed opening a web browser" and then "Too many requests ... (slow_down)": the GitHub CLI couldn't open a browser, and GitHub then blocked the login for a few minutes. Run the `gh config set browser ...` line from step 2, wait about 5 minutes, and run `gh auth login` again. If the terminal still shows an error after you approved in the browser, run `gh auth status`; the login often went through anyway.
 
 **`package '...' not found`**: the terminal was opened before the package was built. Open a new terminal, or run `source ~/ros2_ws/install/setup.bash`.
 
