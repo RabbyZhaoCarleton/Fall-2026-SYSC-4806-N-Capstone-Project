@@ -1,0 +1,8 @@
+# Keep Unix line endings even when someone commits from Windows.
+# Scripts with Windows (CRLF) line endings fail to run in Linux.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.pgm binary
+*.stl binary
+*.dae binary
