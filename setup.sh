@@ -134,6 +134,13 @@ fi
 
 # ---------------------------------------------------------------- build
 step "Building the workspace"
+# Load the ROS environment again: packages rosdep just installed (such as Gazebo's gz_*_vendor
+# packages) add their own paths, which only appear after sourcing. Without this, a first-time
+# build fails with: Could not find a package configuration file provided by "gz-sim8".
+set +u
+# shellcheck disable=SC1091
+source /opt/ros/jazzy/setup.bash
+set -u
 if [ "$MODE" = sim ]; then
   # turtlebot3_gazebo is built from the pinned source in capstone.repos, which may also be installed from apt.
   colcon build --symlink-install --allow-overriding turtlebot3_gazebo \
