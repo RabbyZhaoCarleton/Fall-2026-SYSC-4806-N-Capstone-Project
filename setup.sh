@@ -23,6 +23,24 @@ info() { printf '    %s\n' "$*"; }
 warn() { printf '\033[1;33mWARNING:\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
+# Ubuntu installs security updates in the background (unattended-upgrades), usually in the
+# first minutes after a new install or after WSL starts. Only one program can install packages
+# at a time, so wait for it instead of failing with "Could not get lock /var/lib/dpkg/lock-frontend".
+APT_OPTS=(-o DPkg::Lock::Timeout=600)
+wait_for_apt() {
+  local waited=0
+  while pgrep -f '^/usr/bin/python3 /usr/bin/unattended-upgrade( |$)' >/dev/null \
+        || pgrep -x 'apt|apt-get|dpkg|aptitude' >/dev/null; do
+    if [ "$waited" -eq 0 ]; then
+      info "Ubuntu is installing its automatic updates in the background. Waiting for it to finish"
+      info "(this can take several minutes on a new install; don't close the terminal)..."
+    fi
+    sleep 10; waited=$((waited + 10))
+    if [ $((waited % 60)) -eq 0 ]; then info "still waiting ($((waited / 60)) min)"; fi
+    [ "$waited" -lt 1800 ] || die "Still waiting for other package installs after 30 minutes. Restart WSL (wsl --shutdown in PowerShell) and run ./setup.sh again."
+  done
+}
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_NAME="$(basename "$REPO_DIR")"
 SRC_DIR="$(dirname "$REPO_DIR")"
@@ -48,15 +66,17 @@ step "ROS 2 Jazzy apt repository"
 if dpkg -s ros2-apt-source >/dev/null 2>&1 || [ -f /etc/apt/sources.list.d/ros2.sources ] || [ -f /etc/apt/sources.list.d/ros2.list ]; then
   info "already configured"
 else
-  sudo apt-get update
-  sudo apt-get install -y curl software-properties-common
+  wait_for_apt
+  sudo apt-get "${APT_OPTS[@]}" update
+  sudo apt-get "${APT_OPTS[@]}" install -y curl software-properties-common
   sudo add-apt-repository -y universe
   ROS_APT_SOURCE_VERSION=$(curl -s https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest | grep -F '"tag_name"' | awk -F'"' '{print $4}')
   [ -n "$ROS_APT_SOURCE_VERSION" ] || die "Could not look up the ros-apt-source release. Check the internet connection and try again."
   curl -fL -o /tmp/ros2-apt-source.deb \
     "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-apt-source_${ROS_APT_SOURCE_VERSION}.${VERSION_CODENAME}_all.deb"
+  wait_for_apt
   sudo dpkg -i /tmp/ros2-apt-source.deb
-  sudo apt-get update
+  sudo apt-get "${APT_OPTS[@]}" update
 fi
 
 # ---------------------------------------------------------------- apt packages
@@ -72,8 +92,9 @@ if [ ${#MISSING[@]} -eq 0 ]; then
   info "already installed: ${PKGS[*]}"
 else
   info "installing: ${MISSING[*]} (this is the long part, often 10 to 30 minutes)"
-  sudo apt-get update
-  sudo apt-get install -y "${MISSING[@]}"
+  wait_for_apt
+  sudo apt-get "${APT_OPTS[@]}" update
+  sudo apt-get "${APT_OPTS[@]}" install -y "${MISSING[@]}"
 fi
 
 # Load ROS into this script (rosdep and colcon need ROS_DISTRO and the underlay)
@@ -107,6 +128,7 @@ fi
 if rosdep check --from-paths "${DEP_PATHS[@]}" --ignore-src --rosdistro jazzy >/dev/null 2>&1; then
   info "all dependencies already installed"
 else
+  wait_for_apt
   rosdep install --from-paths "${DEP_PATHS[@]}" --ignore-src -y --rosdistro jazzy
 fi
 

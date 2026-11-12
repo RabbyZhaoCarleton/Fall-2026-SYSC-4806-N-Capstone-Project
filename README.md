@@ -148,6 +148,8 @@ ros2 topic pub --once /explore/resume std_msgs/msg/Bool "{data: true}"
 
 **`gh auth login` fails** with "Failed opening a web browser" and then "Too many requests ... (slow_down)": the GitHub CLI couldn't open a browser, and GitHub then blocked the login for a few minutes. Run the `gh config set browser ...` line from step 2, wait about 5 minutes, and run `gh auth login` again. If the terminal still shows an error after you approved in the browser, run `gh auth status`; the login often went through anyway.
 
+**"Could not get lock /var/lib/dpkg/lock-frontend ... held by process ... (unattended-upgr)"**: Ubuntu is installing its automatic updates in the background, which it often does right after a new install. `setup.sh` now waits for this by itself; if you see the error from another command, wait until `pgrep -af /usr/bin/unattended-upgrade` prints nothing, then run the command again. Don't delete the lock files or kill the update.
+
 **`package '...' not found`**: the terminal was opened before the package was built. Open a new terminal, or run `source ~/ros2_ws/install/setup.bash`.
 
 **"A Gazebo server is already running"**, the wrong world appears, or the robot stutters: an earlier simulation is still running in the background. Stop it with `gzkill`, then launch again.
