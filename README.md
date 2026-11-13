@@ -8,6 +8,7 @@ An autonomous robot that maps an unknown grid maze with a 2D lidar (SLAM), plans
 | `maze_navigation` | slam_toolbox, Nav2 and explore_lite configuration | yes | yes |
 | `maze_bringup` | Hardware drivers and robot launch files | no | yes |
 | `maze_sim` | Gazebo worlds, maze generator, simulation launch files | yes | no |
+| `maze_monitor` | Debugging monitor: live analysis, run recording, replay, run management | yes | no (run it on the PC) |
 
 Third-party source packages (TurtleBot3 simulation, m-explore-ros2) are pinned in `capstone.repos` and fetched by `setup.sh`.
 
@@ -124,6 +125,8 @@ ros2 launch maze_sim maze.launch.py [arguments]
 | `rviz` | `true` | Open RViz |
 | `world` | `maze_sim/worlds/maze.sdf` | World file to load |
 | `x_pose`, `y_pose` | `0.25`, `-0.25` | Robot start position in metres |
+| `monitor` | `true` | Open the maze monitor (see below) |
+| `monitor_record` | `true` | Save each run to `~/maze_runs` |
 
 See all arguments with `ros2 launch maze_sim maze.launch.py --show-args`.
 
@@ -143,6 +146,18 @@ ros2 topic pub --once /explore/resume std_msgs/msg/Bool "{data: true}"
 ```
 
 **Change the maze:** edit the ASCII drawing in `maze_sim/scripts/make_maze.py` and run it. It writes `maze_sim/worlds/maze.sdf`. Rebuild after adding a new world file.
+
+## Debugging with the maze monitor
+
+The maze monitor opens with the simulation. It explains in plain language what the robot is doing, flags problems such as collisions, getting stuck, failed plans, and localization jumps, and records every run so that you can replay it with a timeline.
+
+To look at saved runs later, without the simulation:
+
+```bash
+ros2 run maze_monitor maze_monitor --no-ros --replay latest
+```
+
+See the [user manual](maze_monitor/docs/user-manual.md) and the [design document](maze_monitor/docs/design.md).
 
 ## Troubleshooting
 

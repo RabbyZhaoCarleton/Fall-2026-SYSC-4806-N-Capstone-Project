@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 
@@ -91,6 +92,33 @@ def start_nav_and_explore(context):
     return actions
 
 
+MONITORED_ARGS = ('world', 'x_pose', 'y_pose', 'use_sim_time', 'slam', 'rviz', 'gui', 'nav',
+                  'explore', 'nav_params', 'explore_params')
+
+
+def start_monitor(context):
+    """Start the maze_monitor GUI, labelled with the launch mode, if monitor is true."""
+    if not is_true(LaunchConfiguration('monitor').perform(context)):
+        return []
+    values = {name: LaunchConfiguration(name).perform(context) for name in MONITORED_ARGS}
+    if is_true(values['explore']):
+        label = 'explore'
+    elif is_true(values['nav']):
+        label = 'nav'
+    else:
+        label = 'manual'
+    arguments = ['--label', label, '--launch-args', json.dumps(values)]
+    if not is_true(LaunchConfiguration('monitor_record').perform(context)):
+        arguments.append('--no-record')
+    return [Node(
+        package='maze_monitor',
+        executable='maze_monitor',
+        name='maze_monitor',
+        output='screen',
+        arguments=arguments,
+    )]
+
+
 def generate_launch_description():
     tb3_gazebo = get_package_share_directory('turtlebot3_gazebo')
     launch_file_dir = os.path.join(tb3_gazebo, 'launch')
@@ -145,6 +173,12 @@ def generate_launch_description():
             'explore_params',
             default_value=os.path.join(maze_navigation, 'config', 'explore_maze.yaml'),
             description='explore_lite parameters file'),
+        DeclareLaunchArgument(
+            'monitor', default_value='true',
+            description='Open the maze monitor (live view, run recording, and replay)'),
+        DeclareLaunchArgument(
+            'monitor_record', default_value='true',
+            description='Save the run to ~/maze_runs (only with monitor:=true)'),
     ]
 
     # The Gazebo window is optional. If it crashes or is closed, the simulation,
@@ -208,4 +242,5 @@ def generate_launch_description():
     ld.add_action(slam_cmd)
     ld.add_action(rviz_cmd)
     ld.add_action(OpaqueFunction(function=start_nav_and_explore))
+    ld.add_action(OpaqueFunction(function=start_monitor))
     return ld

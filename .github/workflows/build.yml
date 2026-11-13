@@ -40,3 +40,8 @@ jobs:
         run: |
           source install/setup.bash
           ros2 launch maze_sim maze.launch.py --show-args > /dev/null
+
+      - name: Test the maze monitor
+        run: |
+          source install/setup.bash
+          python3 -m pytest -q src/capstone/maze_monitor/test
