@@ -123,6 +123,7 @@ if [ "$MODE" = sim ]; then
   DEP_PATHS=(src)
 else
   DEP_PATHS=("src/$REPO_NAME/maze_description" "src/$REPO_NAME/maze_navigation" "src/$REPO_NAME/maze_bringup"
+             "src/$REPO_NAME/lidar_bringup" src/sllidar_ros2
              src/m-explore-ros2/explore src/m-explore-ros2/explore_lite_msgs)
 fi
 if rosdep check --from-paths "${DEP_PATHS[@]}" --ignore-src --rosdistro jazzy >/dev/null 2>&1; then
@@ -144,9 +145,9 @@ set -u
 if [ "$MODE" = sim ]; then
   # turtlebot3_gazebo is built from the pinned source in capstone.repos, which may also be installed from apt.
   colcon build --symlink-install --allow-overriding turtlebot3_gazebo \
-    --packages-up-to maze_sim maze_description maze_navigation maze_bringup
+    --packages-up-to maze_sim maze_description maze_navigation maze_bringup lidar_bringup
 else
-  colcon build --symlink-install --packages-up-to maze_description maze_navigation maze_bringup
+  colcon build --symlink-install --packages-up-to maze_description maze_navigation maze_bringup lidar_bringup
 fi
 
 # ---------------------------------------------------------------- GPU (WSL only)

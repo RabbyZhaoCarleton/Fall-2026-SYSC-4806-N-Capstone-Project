@@ -15,23 +15,37 @@ lidar_bringup/
     └── load_generator.py          CPU load to emulate SLAM/Nav2
 ```
 
-## 1. Prerequisites (Ubuntu 24.04 + ROS 2 Jazzy, same steps on PC and Pi 5)
+## 1. Build
+`setup.sh` (see the top-level README) fetches the Slamtec driver `sllidar_ros2` (pinned in
+`capstone.repos`) and builds this package, on the PC and on the Pi (`--robot`). After a `git pull`:
 ```bash
-sudo apt install ros-jazzy-desktop python3-colcon-common-extensions git   # Pi: ros-jazzy-ros-base
-mkdir -p ~/ws/src && cd ~/ws/src
-git clone https://github.com/Slamtec/sllidar_ros2.git      # vendor driver (build from source)
-cp -r /path/to/lidar_bringup .                              # this package
-cd ~/ws && rosdep install --from-paths src -y --ignore-src
-colcon build --symlink-install && source install/setup.bash
+cd ~/ros2_ws/src/capstone && ./setup.sh
 ```
-If the Slamtec repo's default branch does not build on Jazzy, check its Issues/branches; the
-node/param names used here (`sllidar_node`, `serial_port`, `serial_baudrate`, `frame_id`,
-`inverted`, `angle_compensate`, `scan_mode`) match its C1 launch file.
+To build only the LiDAR packages:
+```bash
+cd ~/ros2_ws && colcon build --symlink-install --packages-up-to lidar_bringup && source install/setup.bash
+```
+
+## 1b. WSL only: attach the USB device to Ubuntu
+Windows owns USB devices; WSL only sees the LiDAR after it is passed through with
+[usbipd-win](https://github.com/dorssel/usbipd-win). Install it once from PowerShell:
+`winget install usbipd`. Then, in **PowerShell**:
+```powershell
+usbipd list                          # find the "Silicon Labs CP210x" row, e.g. BUSID 2-4
+usbipd bind --busid 2-4              # once per device, needs an ADMIN PowerShell
+usbipd attach --wsl --busid 2-4      # every time the LiDAR is plugged in or WSL restarts
+```
+While attached, the device disappears from Windows (no COM port) and appears in Ubuntu as
+`/dev/ttyUSB0`. `usbipd detach --busid 2-4` gives it back to Windows.
+
+If `usbipd attach` crashes with **"WSL failed to parse distributions"** followed by garbled
+characters, the Windows environment variable `WSL_UTF8=1` is set. Clear it for that window and
+retry: `$env:WSL_UTF8 = $null` (or remove it from the Windows user environment variables).
 
 ## 2. Persistent device name
 ```bash
-./src/lidar_bringup/scripts/install_udev.sh        # add --remove-brltty if ttyUSB0 vanishes
-# log out/in (dialout group), replug the LiDAR
+~/ros2_ws/src/capstone/lidar_bringup/scripts/install_udev.sh   # add --remove-brltty if ttyUSB0 vanishes
+# replug the LiDAR (WSL: usbipd detach + attach) so the rule applies
 ls -l /dev/rplidar          # -> /dev/rplidar -> ttyUSB0
 ```
 **ESP32 clash:** the C1's adapter (CP210x, 10c4:ea60) is the same chip many ESP32 boards use.
@@ -49,11 +63,11 @@ ros2 launch lidar_bringup rplidar_c1.launch.py lidar_x:=0.08 lidar_z:=0.15   # r
 |---|---|---|
 | Topic exists | `ros2 topic list \| grep scan` | `/scan` listed |
 | Rate | `ros2 topic hz /scan --qos-reliability best_effort` | ~10 Hz |
-| Content | `ros2 topic echo /scan --once --qos-reliability best_effort` | `frame_id: laser_frame`, ~500 ranges, `range_max` about 12 |
+| Content | `ros2 topic echo /scan --once --qos-reliability best_effort` | `frame_id: laser_frame`, 720 ranges (angle_compensate), `range_min` 0.05, `range_max` 16 |
 | QoS | `ros2 topic info /scan -v` | publisher is BEST_EFFORT |
 | TF | `ros2 run tf2_ros tf2_echo base_link laser_frame` | transform printed |
 | RViz | `use_rviz:=true` | wall points appear; Fixed Frame `laser_frame`; scan topic reliability **Best Effort** |
-| Monitor | launch output / `ros2 run lidar_bringup scan_monitor` | `[scan_cb] ~10 Hz`, no "BELOW TARGET" |
+| Monitor | launch output / `ros2 run lidar_bringup scan_monitor` | `[scan_cb] ~10 Hz`, no "BELOW TARGET". One "No /scan messages received yet" warning at startup is normal (the motor is spinning up) |
 | Accuracy | tape-measure a flat wall at 0.3/1/3 m | within your 5 cm spec (proposal §4.2) |
 
 RViz showing nothing is almost always QoS (Reliable subscriber vs Best Effort publisher) or a wrong
