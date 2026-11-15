@@ -356,8 +356,10 @@ class AnalysisView(QWidget):
                 ('Growth (30 s)', f'{growth:.2f} m²/min' if growth is not None else '—',
                  style.AMBER if growth is not None and growth <= 0.0 and g('explore.frontiers', 0) else None),
                 ('Frontiers', f'{int(g("explore.frontiers"))}' if g('explore.frontiers') is not None else '—'),
+                ('Postponed', f'{int(g("explore.postponed", 0))}'),
                 ('Abandoned', f'{int(g("explore.blacklisted", 0))}',
                  style.AMBER if g('explore.blacklisted', 0) else None),
+                ('Exits found', f'{int(g("explore.exits", 0))}'),
                 ('Map size', f'{g("map.width", 0):.1f} × {g("map.height", 0):.1f} m'
                  if g('map.width') is not None else '—'),
             ])

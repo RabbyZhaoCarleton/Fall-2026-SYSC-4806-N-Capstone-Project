@@ -173,8 +173,8 @@ planner failures.
 ### Exploration
 
 The explore_lite status, known map area and its growth over the last 30
-seconds, the number of frontiers, and the number of frontiers that
-explore_lite abandoned.
+seconds, the number of frontiers, and how many frontiers explore_lite
+postponed, abandoned, or recognised as maze exits.
 
 ### Health
 
@@ -408,16 +408,20 @@ Each procedure starts in the run manager with the run that went wrong.
     tried to free the robot and failed.
 3.  Look at the **Surroundings** card: walls close on several sides mean that
     the robot is wedged in a narrow spot.
-4.  Look for **Exploration gave up on a frontier** events. explore_lite
-    abandons a frontier after its `progress_timeout` (20 s in this project).
+4.  Look for **Exploration postponed a frontier** and **Exploration gave up
+    on a frontier** events. explore_lite postpones a frontier when Nav2 fails
+    or after its `progress_timeout` (20 s) or `commit_timeout` (60 s), and
+    abandons it after `max_frontier_attempts` (3) tries.
 
 ### Exploration stops early
 
 1.  Look at the **Exploration** card at the end of the run: the status, the
     number of frontiers left, and the abandoned frontiers.
 2.  If frontiers are left but the status is **exploration complete**, all
-    remaining frontiers were abandoned. Click their events to see where they
-    are.
+    remaining frontiers are maze exits or were abandoned. Click their events
+    to see where they are. An exit in the middle of the maze means the robot
+    reached a frontier that the map didn't fill in within
+    `exit_settle_time`.
 3.  An **Exploration stalled** event means that the map didn't grow for 60
     seconds while exploring.
 
@@ -457,7 +461,9 @@ mean, and where to look next.
 | Controller failed to follow the path | Warning | The controller found no safe velocities. | Surroundings card; obstacles on the path. |
 | Recovery | Warning | Nav2 ran a recovery behavior (spin, back up, wait). | What happened just before. |
 | Route got longer | Info | The planner switched to a longer route to the same goal. | The map: which passage turned out to be blocked. |
-| Exploration gave up on a frontier | Warning | explore_lite abandoned a frontier after making no progress toward it. | The frontier position on the map; goal failures before it. |
+| Exploration postponed a frontier | Info | explore_lite couldn't reach a frontier for now (Nav2 failure or a timeout). It retries it once no other frontier is left. | The frontier position on the map; goal failures before it. |
+| Exploration gave up on a frontier | Warning | explore_lite failed to reach a frontier `max_frontier_attempts` times and won't try it again. | The frontier position on the map; goal failures before it. |
+| Exploration found a maze exit | Info | The robot reached a frontier, but it stayed unexplored because it opens to the outside. explore_lite won't drive to it again. | Whether the position is really an opening in the outer wall. |
 | Exploration stalled | Warning | The map didn't grow for 60 s while exploring. | Navigation card; whether the robot is stuck. |
 | Log messages in brackets, for example `[controller_server] …` | Warning or error | A node logged a warning or error. Repeats are merged and counted. | The node named in brackets. |
 

@@ -6,9 +6,28 @@
     costmap_updates_topic: map_updates
     visualize: true
     planner_frequency: 0.15
-    progress_timeout: 20.0
     potential_scale: 10.0
     orientation_scale: 0.0
     gain_scale: 1.0
     transform_tolerance: 0.3
     min_frontier_size: 0.3
+
+    # Frontier commitment (patches/m-explore-ros2/0002). The robot keeps the
+    # frontier it chose until it is explored or reached, even if another one
+    # scores better. It gives up early if Nav2 keeps failing or one of these runs out:
+    progress_timeout: 20.0       # s without getting closer to the frontier
+    commit_timeout: 60.0         # s in total without reaching it
+    # A Nav2 failure can be brief (a late map->odom transform fails a goal at
+    # once), so the same frontier is retried this many times before giving up.
+    nav2_retries: 2
+    nav2_retry_delay: 2.0        # s
+    # A frontier it gave up on is postponed and tried again once no other
+    # frontier is left; after this many tries it is abandoned for good.
+    max_frontier_attempts: 3
+    # A frontier that is still unexplored once the robot reaches it (or gives up
+    # within exit_reach_distance of it) is open to the outside: a maze exit. The
+    # robot never drives to it again. exit_settle_time lets the map catch up first.
+    exit_reach_distance: 0.4     # m
+    exit_settle_time: 4.0        # s
+    # How close a frontier must be to a remembered one to count as the same.
+    frontier_match_radius: 0.3   # m

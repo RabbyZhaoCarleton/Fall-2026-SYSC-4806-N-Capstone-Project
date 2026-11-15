@@ -193,3 +193,35 @@ def test_goal_churn():
     f.finish(20.0)
     churn = [e for e in f.session.timeline.events if e.key == 'goal_churn']
     assert len(churn) == 1 and churn[0].count >= 3
+
+
+def _frontier_markers(frontiers):
+    """MarkerArray like explore_lite's: (x, y, (r, g, b)) per frontier."""
+    from std_msgs.msg import ColorRGBA
+    from visualization_msgs.msg import Marker, MarkerArray
+    out = MarkerArray()
+    for i, (x, y, (r, g, b)) in enumerate(frontiers):
+        points = Marker(id=2 * i, type=Marker.POINTS, action=Marker.ADD)
+        points.color = ColorRGBA(r=r, g=g, b=b, a=0.5)
+        sphere = Marker(id=2 * i + 1, type=Marker.SPHERE, action=Marker.ADD)
+        sphere.pose.position.x, sphere.pose.position.y = x, y
+        out.markers += [points, sphere]
+    return out
+
+
+def test_frontier_states_from_marker_colours():
+    blue, orange, purple, red = (0., 0., 1.), (1., .5, 0.), (.6, 0., 1.), (1., 0., 0.)
+    f = Feeder()
+    f.feed(1.0, '/explore/frontiers', _frontier_markers(
+        [(0.0, 0.0, blue), (1.0, 0.0, orange), (2.0, 0.0, purple), (3.0, 0.0, red)]))
+    # the same states again: no new events
+    f.feed(2.0, '/explore/frontiers', _frontier_markers(
+        [(0.0, 0.0, blue), (1.0, 0.0, orange), (2.0, 0.0, purple), (3.0, 0.0, red)]))
+    tl = f.finish(3.0)
+    titles = sorted(e.title.split(' at ')[0] for e in f.events(category='exploration'))
+    assert titles == ['Exploration found a maze exit', 'Exploration gave up on a frontier',
+                      'Exploration postponed a frontier']
+    assert tl.value('explore.frontiers', 3.0) == 4
+    assert tl.value('explore.postponed', 3.0) == 1
+    assert tl.value('explore.exits', 3.0) == 1
+    assert tl.value('explore.blacklisted', 3.0) == 1

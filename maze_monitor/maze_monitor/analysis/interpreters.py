@@ -599,13 +599,42 @@ class NavigationInterpreter(Interpreter):
 
 
 # ======================================================================== exploration
+# explore_lite (with the capstone frontier-commitment patch) colours frontiers:
+# blue open, orange postponed, purple maze exit, red abandoned.
+FRONTIER_KINDS = {
+    'abandoned': ('explore.blacklisted', 'Abandoned frontiers', 'warning',
+                  'Exploration gave up on a frontier',
+                  'explore_lite failed to reach this frontier max_frontier_attempts times '
+                  '(Nav2 failures, or no progress within progress_timeout / commit_timeout), '
+                  'so it will not try it again.'),
+    'postponed': ('explore.postponed', 'Postponed frontiers', 'info',
+                  'Exploration postponed a frontier',
+                  'explore_lite could not reach this frontier for now (Nav2 failure, a timeout, '
+                  'or a wall cutting it off). It will retry it once no other frontier is left.'),
+    'exit': ('explore.exits', 'Maze exits', 'info',
+             'Exploration found a maze exit',
+             'The robot reached this frontier but it stayed unexplored, so it opens to the '
+             'outside. explore_lite will not drive to it again.'),
+}
+
+
+def frontier_kind(color):
+    """Classify a frontier marker colour from explore_lite, or None for open frontiers."""
+    if color.b > 0.8 and color.r > 0.4:
+        return 'exit'
+    if color.r > 0.8 and color.b < 0.3:
+        return 'postponed' if color.g > 0.3 else 'abandoned'
+    return None
+
+
 class ExplorationInterpreter(Interpreter):
     types = (GRID, MARKERS, EXPLORE_STATUS)
 
     def __init__(self):
         self.last_known = 0.0
         self.last_growth_t = None
-        self.blacklisted = 0
+        # frontier positions already reported, per marker colour class
+        self.reported = {kind: set() for kind in FRONTIER_KINDS}
         self.status = None
 
     def accepts(self, topic, type_name):
@@ -632,19 +661,24 @@ class ExplorationInterpreter(Interpreter):
         elif name == 'MarkerArray':
             spheres = [m for m in msg.markers if m.action == 0 and m.type == 2]
             centroids = {m.id: (m.pose.position.x, m.pose.position.y) for m in spheres}
-            black = [m for m in msg.markers if m.action == 0 and m.type == 8
-                     and m.color.r > 0.5 and m.color.b < 0.5]
             ctx.emit(t, 'explore.frontiers', float(len(spheres)), 'Frontiers', '')
-            ctx.emit(t, 'explore.blacklisted', float(len(black)), 'Abandoned frontiers', '')
-            if len(black) > self.blacklisted:
-                for m in black[self.blacklisted:]:
-                    x, y = centroids.get(m.id + 1, (None, None))
-                    ctx.event(t, 'warning', 'exploration',
-                              f'Exploration gave up on a frontier at {fmt_xy(x, y)}',
-                              'explore_lite made no progress toward this frontier within its '
-                              'progress_timeout, so it will not try it again. The frontier may '
-                              'be unreachable, or Nav2 kept failing on the way.', x=x, y=y)
-            self.blacklisted = len(black)
+            # explore_lite colours each frontier's points by its state; the matching
+            # centroid sphere has the next id.
+            found = {kind: [] for kind in FRONTIER_KINDS}
+            for m in msg.markers:
+                if m.action == 0 and m.type == 8:
+                    kind = frontier_kind(m.color)
+                    if kind:
+                        found[kind].append(centroids.get(m.id + 1, (None, None)))
+            for kind, (key, label, severity, title, detail) in FRONTIER_KINDS.items():
+                ctx.emit(t, key, float(len(found[kind])), label, '')
+                for x, y in found[kind]:
+                    spot = (None, None) if x is None else (round(x, 1), round(y, 1))
+                    if spot in self.reported[kind]:
+                        continue
+                    self.reported[kind].add(spot)
+                    ctx.event(t, severity, 'exploration', f'{title} at {fmt_xy(x, y)}',
+                              detail, x=x, y=y)
         elif name == 'ExploreStatus':
             if msg.status == self.status:
                 return
