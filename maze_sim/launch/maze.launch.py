@@ -123,6 +123,10 @@ def generate_launch_description():
             'slam', default_value='true',
             description='Start slam_toolbox'),
         DeclareLaunchArgument(
+            'slam_params',
+            default_value=os.path.join(maze_navigation, 'config', 'slam_maze.yaml'),
+            description='slam_toolbox parameters file'),
+        DeclareLaunchArgument(
             'rviz', default_value='true',
             description='Start RViz 2'),
         DeclareLaunchArgument(
@@ -178,7 +182,10 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(slam_toolbox, 'launch', 'online_async_launch.py')
         ),
-        launch_arguments={'use_sim_time': use_sim_time}.items(),
+        launch_arguments={
+            'use_sim_time': use_sim_time,
+            'slam_params_file': LaunchConfiguration('slam_params'),
+        }.items(),
         condition=IfCondition(slam),
     )
 
