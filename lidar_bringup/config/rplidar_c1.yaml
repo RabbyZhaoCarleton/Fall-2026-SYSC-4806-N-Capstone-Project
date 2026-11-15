@@ -1,0 +1,23 @@
+# RPLIDAR C1 parameters for the sllidar_ros2 driver (ROS 2 Jazzy).
+# Loaded by launch/rplidar_c1.launch.py. Wildcard namespace so it matches any node name.
+#
+# C1 facts (Slamtec datasheet): DTOF, ~5 kHz sampling, fixed ~10 Hz rotation,
+# ~12 m on white targets (shorter on dark/low-reflectivity surfaces), ~5 cm blind zone.
+# That is ~500 points/rev (~0.7 deg). Rotation speed is NOT user-adjustable on the C1.
+/**:
+  ros__parameters:
+    # --- Connection -------------------------------------------------------
+    channel_type: "serial"            # C1 is USB-UART (CP2102). Not tcp/udp.
+    serial_port: "/dev/rplidar"       # Persistent symlink from udev rule
+    serial_baudrate: 460800           # C1 requires 460800 (A1/A2 use 115200 - do not copy those)
+
+    # --- Frame / output ---------------------------------------------------
+    frame_id: "laser_frame"           # Must match the static TF child frame
+    inverted: false                   # true only if the LiDAR is mounted upside-down
+    angle_compensate: true            # Resample into evenly spaced beams; slam_toolbox
+                                      # and Nav2 expect uniform angle_increment
+
+    # --- Scan mode --------------------------------------------------------
+    # "Standard" is the C1's stock mode (the one that gives the full 12 m range).
+    # If the driver logs "scan mode not supported", set to "" to auto-select.
+    scan_mode: "Standard"

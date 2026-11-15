@@ -1,0 +1,24 @@
+# /etc/udev/rules.d/99-rplidar.rules
+# Persistent name for the Slamtec RPLIDAR C1 (CP2102 USB-UART bridge).
+#   -> /dev/rplidar  (symlink to the dynamic /dev/ttyUSBx)
+#
+# The C1's adapter is a Silicon Labs CP210x (VID 10c4 / PID ea60). Many ESP32
+# dev boards use the SAME chip, so matching VID/PID alone can hand the
+# /dev/rplidar name to the wrong device. Pick ONE option below.
+#
+# Find your values with:
+#   udevadm info -a -n /dev/ttyUSB0 | grep -E 'idVendor|idProduct|serial|KERNELS'
+
+# --- Option A (default): VID/PID only. Fine while the LiDAR is the only CP210x device.
+SUBSYSTEM=="tty", KERNEL=="ttyUSB*", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", \
+  SYMLINK+="rplidar", MODE="0666", GROUP="dialout", ENV{ID_MM_DEVICE_IGNORE}="1"
+
+# --- Option B: also match the adapter serial number (only if YOUR adapter's serial is unique;
+#     many Slamtec adapters ship with the generic serial "0001" which is NOT unique).
+# SUBSYSTEM=="tty", KERNEL=="ttyUSB*", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", \
+#   ATTRS{serial}=="REPLACE_ME", SYMLINK+="rplidar", MODE="0666", GROUP="dialout"
+
+# --- Option C: match the physical USB port (robust when ESP32 + LiDAR share a chip).
+#     The device will only be named /dev/rplidar when plugged into THAT port.
+# SUBSYSTEM=="tty", KERNEL=="ttyUSB*", KERNELS=="1-2:1.0", \
+#   SYMLINK+="rplidar", MODE="0666", GROUP="dialout"
