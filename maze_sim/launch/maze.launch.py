@@ -103,6 +103,73 @@ def start_nav_and_explore(context):
     return actions
 
 
+def spawn_robot(context):
+    """Spawn the TurtleBot3 and bridge its topics; with ekf:=true, also start the EKF.
+
+    Without the EKF this is turtlebot3_gazebo's own spawn launch, where Gazebo's
+    wheel odometry publishes odom -> base_footprint. With the EKF, that transform
+    is left out of the bridge and robot_localization publishes it instead.
+    """
+    tb3_gazebo = get_package_share_directory('turtlebot3_gazebo')
+    x_pose = LaunchConfiguration('x_pose').perform(context)
+    y_pose = LaunchConfiguration('y_pose').perform(context)
+    if not is_true(LaunchConfiguration('ekf').perform(context)):
+        return [IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(tb3_gazebo, 'launch', 'spawn_turtlebot3.launch.py')),
+            launch_arguments={'x_pose': x_pose, 'y_pose': y_pose}.items(),
+        )]
+
+    model = os.environ.get('TURTLEBOT3_MODEL', 'burger')
+    if model != 'burger':
+        raise RuntimeError(
+            f'ekf:=true has a bridge config for the burger only (TURTLEBOT3_MODEL={model}). '
+            'Use ekf:=false or add a bridge config for this model.')
+    ekf_params = os.path.abspath(os.path.expanduser(
+        LaunchConfiguration('ekf_params').perform(context)))
+    if not os.path.isfile(ekf_params):
+        raise RuntimeError(f'EKF params file not found: {ekf_params}')
+    use_sim_time = is_true(LaunchConfiguration('use_sim_time').perform(context))
+    maze_sim = get_package_share_directory('maze_sim')
+
+    return [
+        Node(
+            package='ros_gz_sim',
+            executable='create',
+            arguments=['-name', model,
+                       '-file', os.path.join(tb3_gazebo, 'models', 'turtlebot3_' + model,
+                                             'model.sdf'),
+                       '-x', x_pose, '-y', y_pose, '-z', '0.01'],
+            output='screen',
+        ),
+        Node(
+            package='ros_gz_bridge',
+            executable='parameter_bridge',
+            arguments=['--ros-args', '-p', 'config_file:=' + os.path.join(
+                maze_sim, 'config', 'turtlebot3_burger_bridge.yaml')],
+            output='screen',
+        ),
+        # Gazebo stamps IMU messages with its own frame name (model/link/sensor),
+        # which is not in the robot's TF tree. Tie it to imu_link so the EKF can
+        # use the IMU.
+        Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            arguments=['--frame-id', 'imu_link',
+                       '--child-frame-id', f'{model}/imu_link/tb3_imu'],
+            parameters=[{'use_sim_time': use_sim_time}],
+            output='screen',
+        ),
+        Node(
+            package='robot_localization',
+            executable='ekf_node',
+            name='ekf_filter_node',
+            parameters=[ekf_params, {'use_sim_time': use_sim_time}],
+            output='screen',
+        ),
+    ]
+
+
 def generate_launch_description():
     tb3_gazebo = get_package_share_directory('turtlebot3_gazebo')
     launch_file_dir = os.path.join(tb3_gazebo, 'launch')
@@ -112,8 +179,6 @@ def generate_launch_description():
     maze_navigation = get_package_share_directory('maze_navigation')
 
     use_sim_time = LaunchConfiguration('use_sim_time')
-    x_pose = LaunchConfiguration('x_pose')
-    y_pose = LaunchConfiguration('y_pose')
     slam = LaunchConfiguration('slam')
     rviz = LaunchConfiguration('rviz')
     rviz_config = LaunchConfiguration('rviz_config')
@@ -138,6 +203,14 @@ def generate_launch_description():
             'slam_params',
             default_value=os.path.join(maze_navigation, 'config', 'slam_maze.yaml'),
             description='slam_toolbox parameters file'),
+        DeclareLaunchArgument(
+            'ekf', default_value='true',
+            description='Get odom -> base_footprint from an EKF that combines wheel '
+                        'odometry with the IMU gyro, instead of wheel odometry alone'),
+        DeclareLaunchArgument(
+            'ekf_params',
+            default_value=os.path.join(maze_navigation, 'config', 'ekf_maze.yaml'),
+            description='robot_localization EKF parameters file'),
         DeclareLaunchArgument(
             'rviz', default_value='true',
             description='Start RViz 2'),
@@ -180,13 +253,6 @@ def generate_launch_description():
         launch_arguments={'use_sim_time': use_sim_time}.items(),
     )
 
-    spawn_turtlebot_cmd = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(launch_file_dir, 'spawn_turtlebot3.launch.py')
-        ),
-        launch_arguments={'x_pose': x_pose, 'y_pose': y_pose}.items(),
-    )
-
     set_env_vars_resources = AppendEnvironmentVariable(
         'GZ_SIM_RESOURCE_PATH', os.path.join(tb3_gazebo, 'models'))
 
@@ -223,7 +289,7 @@ def generate_launch_description():
     ld.add_action(OpaqueFunction(function=start_gazebo_server))
     ld.add_action(gzclient_cmd)
     ld.add_action(robot_state_publisher_cmd)
-    ld.add_action(spawn_turtlebot_cmd)
+    ld.add_action(OpaqueFunction(function=spawn_robot))
     ld.add_action(slam_cmd)
     ld.add_action(rviz_cmd)
     ld.add_action(OpaqueFunction(function=start_nav_and_explore))
