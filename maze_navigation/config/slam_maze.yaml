@@ -39,7 +39,9 @@ slam_toolbox:
     restamp_tf: false
     min_laser_range: 0.0
     max_laser_range: 3.5              # maze: 20.0; the TurtleBot3 LDS reaches 3.5 m
-    minimum_time_interval: 1.0
+    minimum_time_interval: 0.5        # maze: same as the default, but here it is the scan period.
+                                      # Shorter gaps keep the odometry heading error between scans
+                                      # inside the scan matcher's search window during fast turns.
     transform_timeout: 0.2
     tf_buffer_duration: 30.0
     stack_size_to_use: 40000000
