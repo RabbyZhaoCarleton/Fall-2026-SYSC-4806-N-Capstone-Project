@@ -50,6 +50,12 @@ def is_true(value):
     return value.strip().lower() in ('true', '1', 'yes')
 
 
+# Seconds after launch. Nav2 takes about 7 s to activate, so explore_lite starts
+# well after it is ready.
+NAV2_START_DELAY = 5.0
+EXPLORE_START_DELAY = 20.0
+
+
 def start_nav_and_explore(context):
     """Start Nav2 if nav or explore is true; start explore_lite if explore is true."""
     nav = is_true(LaunchConfiguration('nav').perform(context))
@@ -65,8 +71,13 @@ def start_nav_and_explore(context):
         if not os.path.isfile(nav_params):
             raise RuntimeError(f'Nav2 params file not found: {nav_params}')
         nav2_bringup = get_package_share_directory('nav2_bringup')
-        actions.append(LogInfo(msg=f'Starting Nav2 with: {nav_params}'))
-        actions.append(IncludeLaunchDescription(
+        actions.append(LogInfo(
+            msg=f'Starting Nav2 in {NAV2_START_DELAY:g} s with: {nav_params}'))
+        # Start Nav2 after Gazebo and SLAM instead of all at once. When ~20 processes
+        # start together, a lifecycle reply from a Nav2 server can be lost while the
+        # nodes are still discovering each other; the lifecycle manager then waits
+        # forever and Nav2 never activates ("Waiting to connect to move_base nav2 server").
+        actions.append(TimerAction(period=NAV2_START_DELAY, actions=[IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(nav2_bringup, 'launch', 'navigation_launch.py')
             ),
@@ -75,14 +86,15 @@ def start_nav_and_explore(context):
                 'params_file': nav_params,
                 'autostart': 'true',
             }.items(),
-        ))
+        )]))
 
     if explore:
         if not os.path.isfile(explore_params):
             raise RuntimeError(f'Explore params file not found: {explore_params}')
-        actions.append(LogInfo(msg=f'Starting explore_lite with: {explore_params}'))
+        actions.append(LogInfo(
+            msg=f'Starting explore_lite in {EXPLORE_START_DELAY:g} s with: {explore_params}'))
         # Give Gazebo, SLAM and Nav2 time to come up before exploring.
-        actions.append(TimerAction(period=15.0, actions=[Node(
+        actions.append(TimerAction(period=EXPLORE_START_DELAY, actions=[Node(
             package='explore_lite',
             executable='explore',
             name='explore_node',
