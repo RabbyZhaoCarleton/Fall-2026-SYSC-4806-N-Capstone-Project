@@ -7,7 +7,7 @@
     visualize: true
     planner_frequency: 0.15
     progress_timeout: 20.0
-    potential_scale: 3.0
+    potential_scale: 10.0
     orientation_scale: 0.0
     gain_scale: 1.0
     transform_tolerance: 0.3
