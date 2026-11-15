@@ -11,14 +11,70 @@ Examples:
   ros2 launch lidar_bringup rplidar_c1.launch.py use_rviz:=true
   ros2 launch lidar_bringup rplidar_c1.launch.py serial_port:=/dev/ttyUSB0 lidar_x:=0.10 lidar_z:=0.15
 """
+import glob
 import os
 
+import launch.logging
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, Shutdown
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+
+def _is_wsl() -> bool:
+    try:
+        with open('/proc/sys/kernel/osrelease') as f:
+            return 'microsoft' in f.read().lower()
+    except OSError:
+        return False
+
+
+def serial_port_problem(port: str):
+    """Return a human-readable explanation if `port` cannot be used, else None.
+
+    sllidar_node does not report this itself: when it cannot open the port it fails later
+    with the misleading "Error, unexpected error, code: 80008004" and the motor never starts.
+    """
+    found = sorted(glob.glob('/dev/ttyUSB*') + glob.glob('/dev/ttyACM*'))
+    found_txt = ', '.join(found) if found else 'none'
+
+    if not os.path.exists(port):
+        if os.path.islink(port):
+            what = f"'{port}' points to '{os.readlink(port)}', which no longer exists"
+        else:
+            what = f"'{port}' does not exist"
+        lines = [f'Serial port problem: {what}. USB serial devices present: {found_txt}.']
+        if not found and _is_wsl():
+            lines.append(
+                'This is WSL: the LiDAR must be attached from Windows PowerShell with '
+                "'usbipd list' then 'usbipd attach --wsl --busid <BUSID>' (again after every "
+                'replug or WSL restart). See lidar_bringup/README.md section 1b.')
+        elif not found:
+            lines.append('Check the USB cable, then dmesg | tail for a cp210x message.')
+        elif port == '/dev/rplidar':
+            lines.append(
+                'The udev rule that creates /dev/rplidar is missing or has not been applied: run '
+                'lidar_bringup/scripts/install_udev.sh, then replug the LiDAR (WSL: usbipd '
+                f'detach + attach). To test right away: serial_port:={found[0]}')
+        return '\n'.join(lines)
+
+    if not os.access(port, os.R_OK | os.W_OK):
+        real = os.path.realpath(port)
+        return (f"Serial port problem: no read/write permission on '{real}'. Run "
+                'lidar_bringup/scripts/install_udev.sh (sets mode 0666) and replug the LiDAR, '
+                "or add yourself to 'dialout' (sudo usermod -aG dialout $USER) and log in again.")
+    return None
+
+
+def _lidar_driver(context, lidar_node: Node):
+    port = LaunchConfiguration('serial_port').perform(context)
+    problem = serial_port_problem(port)
+    if problem is None:
+        return [lidar_node]
+    launch.logging.get_logger('lidar_bringup').error(problem)
+    return [Shutdown(reason='RPLIDAR serial port is not usable')]
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -94,4 +150,8 @@ def generate_launch_description() -> LaunchDescription:
         condition=IfCondition(LaunchConfiguration('use_rviz')),
     )
 
-    return LaunchDescription(args + [lidar_node, static_tf, monitor, rviz])
+    # Check the serial port before starting the driver, so a missing or inaccessible
+    # device gives a clear message instead of a respawn loop of error 80008004.
+    driver = OpaqueFunction(function=_lidar_driver, args=[lidar_node])
+
+    return LaunchDescription(args + [driver, static_tf, monitor, rviz])

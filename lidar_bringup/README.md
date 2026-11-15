@@ -123,6 +123,11 @@ python3 -m lidar_bringup.mock_hardware   # 50 Hz mock loop + type-guard demo
 - Use a short, good-quality data cable. Long or thin USB cables are a classic dropout cause.
 
 **Serial port management (Ubuntu 24.04)**
+- The launch file checks the serial port before starting the driver. If it is missing or not
+  readable/writable, it prints `Serial port problem: ...` with the fix (usbipd attach on WSL, udev
+  rule, permissions) and stops. Without this check the driver only says
+  `Error, unexpected error, code: 80008004` and the motor never spins (a bug in the Slamtec SDK hides
+  the failed port open).
 - **brltty** steals CP210x/CH340 adapters → `ttyUSB0` appears then vanishes. Remove it (`--remove-brltty`).
 - Add your user to `dialout` and re-login, or `/dev/rplidar` will be "permission denied" (rule also sets mode 0666).
 - Only one process may open the port. Close `minicom`/`screen`/a second driver instance first.
