@@ -93,7 +93,7 @@ def start_nav_and_explore(context):
 
 
 MONITORED_ARGS = ('world', 'x_pose', 'y_pose', 'use_sim_time', 'slam', 'rviz', 'gui', 'nav',
-                  'explore', 'nav_params', 'explore_params')
+                  'explore', 'slam_params', 'nav_params', 'explore_params')
 
 
 def start_monitor(context):
@@ -150,6 +150,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'slam', default_value='true',
             description='Start slam_toolbox'),
+        DeclareLaunchArgument(
+            'slam_params',
+            default_value=os.path.join(maze_navigation, 'config', 'slam_maze.yaml'),
+            description='slam_toolbox parameters file'),
         DeclareLaunchArgument(
             'rviz', default_value='true',
             description='Start RViz 2'),
@@ -212,7 +216,10 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(slam_toolbox, 'launch', 'online_async_launch.py')
         ),
-        launch_arguments={'use_sim_time': use_sim_time}.items(),
+        launch_arguments={
+            'use_sim_time': use_sim_time,
+            'slam_params_file': LaunchConfiguration('slam_params'),
+        }.items(),
         condition=IfCondition(slam),
     )
 
