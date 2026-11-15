@@ -1,10 +1,16 @@
 # slam_toolbox parameters for the small grid maze.
 #
 # Based on slam_toolbox's mapper_params_online_async.yaml. Changes from the
-# defaults are marked "maze:". The stock thresholds (add a scan only after 0.5 m
-# or 0.5 rad of travel) suit large rooms; in a ~1.5 m maze slam_toolbox then adds
-# almost no scans, never corrects map->odom, and the pose is raw wheel odometry,
-# whose heading drifts tens of degrees after wall contacts and in-place turns.
+# defaults are marked "maze:". The stock settings only add a scan after the robot
+# has driven about 0.5 m (turning in place does not count); in a ~1.5 m maze
+# slam_toolbox then adds almost no scans, never corrects map->odom, and the pose
+# is raw wheel odometry, whose heading drifts tens of degrees after wall contacts
+# and in-place turns.
+#
+# Here the travel threshold is 0, so slam_toolbox adds a scan every
+# minimum_time_interval seconds whether the robot is moving, turning or still.
+# Every added scan is a node in the pose graph, so a shorter interval costs more
+# CPU and memory over a long run.
 
 slam_toolbox:
   ros__parameters:
@@ -33,7 +39,7 @@ slam_toolbox:
     restamp_tf: false
     min_laser_range: 0.0
     max_laser_range: 3.5              # maze: 20.0; the TurtleBot3 LDS reaches 3.5 m
-    minimum_time_interval: 0.2        # maze: 0.5
+    minimum_time_interval: 0.5        # maze: same as the default, but now it is the scan period
     transform_timeout: 0.2
     tf_buffer_duration: 30.0
     stack_size_to_use: 40000000
@@ -42,8 +48,8 @@ slam_toolbox:
     # General Parameters
     use_scan_matching: true
     use_scan_barycenter: true
-    minimum_travel_distance: 0.1      # maze: 0.5
-    minimum_travel_heading: 0.15      # maze: 0.5 (rad, about 9 deg)
+    minimum_travel_distance: 0.0      # maze: 0.5; 0 = add scans on a timer (minimum_time_interval)
+    minimum_travel_heading: 0.15      # maze: 0.5 (rad, about 9 deg); no effect while distance is 0
     check_min_dist_and_heading_precisely: false
     scan_buffer_size: 10
     scan_buffer_maximum_scan_distance: 3.5   # maze: 10.0
