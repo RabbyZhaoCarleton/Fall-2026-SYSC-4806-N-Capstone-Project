@@ -115,27 +115,14 @@ controller_server:
     goal_checker:
       stateful: true
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.1
+      xy_goal_tolerance: 0.25
       yaw_goal_tolerance: 0.25
     FollowPath:
-      # The rotation shim turns the robot in place to face the path whenever
-      # the path heads well away from where the robot points (such as a U-turn
-      # out of a dead end or an exit), then hands over to DWB. DWB alone is
-      # unreliable at large turns. The shim steers by the path only.
-      plugin: "nav2_rotation_shim_controller::RotationShimController"
-      primary_controller: "dwb_core::DWBLocalPlanner"
-      angular_dist_threshold: 0.785       # rad; turn in place above this (45 deg)
-      angular_disengage_threshold: 0.3925 # rad; hand over to DWB below this
-      forward_sampling_distance: 0.3      # m along the path to aim at
-      rotate_to_heading_angular_vel: 1.0  # rad/s; same as max_vel_theta
-      max_angular_accel: 1.0              # rad/s^2; same slip limit as below
-      simulate_ahead_time: 1.0
-      rotate_to_goal_heading: false
-      # DWB (the primary controller) parameters
+      plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: true
       min_vel_x: 0.0
       min_vel_y: 0.0
-      max_vel_x: 0.15
+      max_vel_x: 0.3
       max_vel_y: 0.0
       max_vel_theta: 1.0
       min_speed_xy: 0.0
@@ -145,35 +132,22 @@ controller_server:
       # https://github.com/ROBOTIS-GIT/turtlebot3_simulations/issues/75
       acc_lim_x: 3.0
       acc_lim_y: 0.0
-      # Turning acceleration is kept to what the simulated robot can follow
-      # (about 1 rad/s^2). Faster changes make the wheels slip, which corrupts the
-      # odometry heading and, through it, the SLAM map. Same limit in the
-      # behavior server and velocity_smoother.
-      acc_lim_theta: 1.0
+      acc_lim_theta: 3.2
       decel_lim_x: -2.5
       decel_lim_y: 0.0
-      decel_lim_theta: -1.0
+      decel_lim_theta: -3.2
       vx_samples: 20
       vy_samples: 0
       vtheta_samples: 40
       sim_time: 1.5
       linear_granularity: 0.05
       angular_granularity: 0.025
-      transform_tolerance: 0.5
-      xy_goal_tolerance: 0.15
+      transform_tolerance: 0.2
+      xy_goal_tolerance: 0.05
       trans_stopped_velocity: 0.25
-      # How far along the path DWB looks for its local goal. In the small maze
-      # a whole detour can fit inside the default range, which makes the local
-      # goal the frontier itself, possibly just behind a wall; the goal critics
-      # then pull the robot to face it through the wall instead of following
-      # the path. A short range keeps the local goal on the path ahead.
-      forward_prune_distance: 0.5
       short_circuit_trajectory_evaluation: true
       stateful: true
       critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
-      # Keep this small (Nav2's default). A large obstacle weight outweighs path
-      # following: a robot stopped near a wall drives off toward open space,
-      # even away from the path. Wall clearance comes from the costmaps instead.
       BaseObstacle.scale: 0.02
       PathAlign.scale: 32.0
       PathAlign.forward_point_distance: 0.1
@@ -197,7 +171,7 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      robot_radius: 0.11   # see global_costmap robot_radius
+      robot_radius: 0.1
       plugins: ["obstacle_layer", "voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
@@ -245,10 +219,7 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_link
       transform_tolerance: 0.5
-      # Close to the burger's real size. The maze corridors are narrow, and a
-      # larger radius leaves only a thin drivable lane down their middle, which
-      # small map changes keep cutting and reopening.
-      robot_radius: 0.11
+      robot_radius: 0.1
       resolution: 0.05
       track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "voxel_layer", "inflation_layer"]
@@ -342,7 +313,7 @@ behavior_server:
     simulate_ahead_time: 2.0
     max_rotational_vel: 1.0
     min_rotational_vel: 0.4
-    rotational_acc_lim: 1.0      # avoid wheel slip; see FollowPath acc_lim_theta
+    rotational_acc_lim: 3.2
     enable_stamped_cmd_vel: true
 
 waypoint_follower:
@@ -440,7 +411,7 @@ collision_monitor:
         theta_max: 1.0
     observation_sources: ["scan"]
     scan:
-      source_timeout: 0.5
+      source_timeout: 0.2
       type: "scan"
       topic: "/scan"
       enabled: true
@@ -454,9 +425,8 @@ velocity_smoother:
     min_velocity: [-0.5, 0.0, -2.5]
     deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 1.0
-    # Turning limit avoids wheel slip; see FollowPath acc_lim_theta.
-    max_accel: [2.5, 0.0, 1.0]
-    max_decel: [-2.5, 0.0, -1.0]
+    max_accel: [2.5, 0.0, 3.2]
+    max_decel: [-2.5, 0.0, -3.2]
     odom_topic: "odom"
     odom_duration: 0.1
     use_realtime_priority: false

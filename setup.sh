@@ -116,21 +116,6 @@ step "Third-party source repositories (capstone.repos)"
 cd "$SRC_DIR"
 vcs import --input "$REPO_NAME/capstone.repos" .
 
-# Apply our local changes to the third-party sources (patches/<repo>/*.patch).
-# A patch that is already applied is skipped, so running setup.sh again is safe.
-for patch in "$REPO_NAME"/patches/*/*.patch; do
-  [ -e "$patch" ] || continue
-  target="$(basename "$(dirname "$patch")")"
-  name="$(basename "$patch")"
-  if git -C "$target" apply --reverse --check "$SRC_DIR/$patch" 2>/dev/null; then
-    info "$target: $name already applied"
-  elif git -C "$target" apply "$SRC_DIR/$patch"; then
-    info "$target: applied $name"
-  else
-    die "$target: could not apply $name (local edits in $target, or the pinned version changed?)"
-  fi
-done
-
 # ---------------------------------------------------------------- dependencies
 step "Dependencies of the workspace packages"
 cd "$WS"
