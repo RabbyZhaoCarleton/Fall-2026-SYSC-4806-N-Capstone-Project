@@ -29,6 +29,7 @@ record:
     /clock: 10.0
     /joint_states: 10.0
     /imu: 100.0
+    /ground_truth/poses: 20.0   # simulator's true robot pose, for measuring drift
   # Topics whose messages are larger than this (in KB) are recorded at most
   # large_message_max_hz times per second, so that unknown debug topics can't
   # fill the disk.

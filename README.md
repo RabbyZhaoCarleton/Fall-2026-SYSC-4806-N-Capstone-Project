@@ -159,6 +159,12 @@ ros2 run maze_monitor maze_monitor --no-ros --replay latest
 
 See the [user manual](maze_monitor/docs/user-manual.md) and the [design document](maze_monitor/docs/design.md).
 
+**Measure localization drift:** the simulation publishes the robot's true pose on `/ground_truth/poses`, and the monitor records it. After a run, compare wheel odometry, the EKF and SLAM against it:
+
+```bash
+python3 ~/ros2_ws/src/capstone/tools/drift_report.py ~/maze_runs/<run>
+```
+
 ## Troubleshooting
 
 **`gh auth login` fails** with "Failed opening a web browser" and then "Too many requests ... (slow_down)": the GitHub CLI couldn't open a browser, and GitHub then blocked the login for a few minutes. Run the `gh config set browser ...` line from step 2, wait about 5 minutes, and run `gh auth login` again. If the terminal still shows an error after you approved in the browser, run `gh auth status`; the login often went through anyway.

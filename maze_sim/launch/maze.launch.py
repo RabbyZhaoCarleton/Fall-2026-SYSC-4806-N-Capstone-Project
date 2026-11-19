@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 
 from ament_index_python.packages import get_package_share_directory
@@ -34,6 +35,7 @@ def start_gazebo_server(context):
     ros_gz_sim = get_package_share_directory('ros_gz_sim')
     return [
         LogInfo(msg=f'Loading world: {world_path}'),
+        ground_truth_bridge(world_path),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(ros_gz_sim, 'launch', 'gz_sim.launch.py')
@@ -44,6 +46,32 @@ def start_gazebo_server(context):
             }.items(),
         ),
     ]
+
+
+def ground_truth_bridge(world_path):
+    """Bridge the simulator's true poses to /ground_truth/poses (geometry_msgs/PoseArray).
+
+    Gazebo publishes the pose of every moving entity on
+    /world/<world>/dynamic_pose/info, ordered by entity: the robot model first
+    (its base_footprint in world coordinates), then its links relative to the
+    model. PoseArray keeps the sim-time stamp; the entity names are lost in any
+    ROS message type, so readers take poses[0] as the robot (one robot only).
+    Odometry, the EKF and SLAM never see this topic. It is recorded so drift can
+    be measured against the truth (tools/drift_report.py).
+    """
+    with open(world_path) as f:
+        match = re.search(r'<world\s+name\s*=\s*"([^"]+)"', f.read())
+    if not match:
+        raise RuntimeError(f'No <world name="..."> in {world_path}')
+    gz_topic = f'/world/{match.group(1)}/dynamic_pose/info'
+    return Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        name='ground_truth_bridge',
+        arguments=[f'{gz_topic}@geometry_msgs/msg/PoseArray[gz.msgs.Pose_V'],
+        remappings=[(gz_topic, '/ground_truth/poses')],
+        output='screen',
+    )
 
 
 def is_true(value):
