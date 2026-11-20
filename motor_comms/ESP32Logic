@@ -1,0 +1,111 @@
+#include <Arduino.h>
+
+// Robot Physical Parameters
+const float WHEEL_RADIUS = 0.040;
+const float LX = 0.075;             // half-distance between front and rear wheels (m)
+const float LY = 0.1;             // half-distance between left and right wheels (m)
+const float MAX_WHEEL_RAD_S = 2.5;
+
+const int PWM_PINS[4] = {13, 14, 26, 25};
+const int DIR1_PINS[4] = {12, 27, 33, 32};
+const int DIR2_PINS[4] = {15, 2, 4, 16};
+
+// Encoder Pins (Must be interrupt-capable)
+const int ENC_A[4] = {34, 35, 36, 39};
+const int ENC_B[4] = {18, 19, 21, 22};
+volatile long enc_ticks[4] = {0, 0, 0, 0};
+
+// Velocity targets from Pi
+float target_vx = 0.0, target_vy = 0.0, target_wz = 0.0;
+unsigned long last_cmd_time = 0;
+unsigned long last_odom_time = 0;
+
+// Interrupt Service Routines for Encoders
+void IRAM_ATTR isr_fl() { enc_ticks[0] += digitalRead(ENC_B[0]) ? 1 : -1; }
+void IRAM_ATTR isr_fr() { enc_ticks[1] += digitalRead(ENC_B[1]) ? -1 : 1; }
+void IRAM_ATTR isr_rl() { enc_ticks[2] += digitalRead(ENC_B[2]) ? 1 : -1; }
+void IRAM_ATTR isr_rr() { enc_ticks[3] += digitalRead(ENC_B[3]) ? -1 : 1; }
+
+void setup() {
+  Serial.begin(115200);
+
+  for (int i = 0; i < 4; i++) {
+    pinMode(PWM_PINS[i], OUTPUT);
+    pinMode(DIR1_PINS[i], OUTPUT);
+    pinMode(DIR2_PINS[i], OUTPUT);
+    pinMode(ENC_A[i], INPUT_PULLUP);
+    pinMode(ENC_B[i], INPUT_PULLUP);
+  }
+
+  attachInterrupt(digitalPinToInterrupt(ENC_A[0]), isr_fl, RISING);
+  attachInterrupt(digitalPinToInterrupt(ENC_A[1]), isr_fr, RISING);
+  attachInterrupt(digitalPinToInterrupt(ENC_A[2]), isr_rl, RISING);
+  attachInterrupt(digitalPinToInterrupt(ENC_A[3]), isr_rr, RISING);
+}
+
+void setMotor(int idx, float rad_s) {
+  // Convert rad/s to PWM (-255 to 255)
+  // For higher SLAM accuracy, replace this open-loop mapping with a PID controller
+  int pwm = constrain((rad_s / MAX_WHEEL_RAD_S) * 255.0, -255, 255);
+
+  if (pwm >= 0) {
+    digitalWrite(DIR1_PINS[idx], HIGH);
+    digitalWrite(DIR2_PINS[idx], LOW);
+  } else {
+    digitalWrite(DIR1_PINS[idx], LOW);
+    digitalWrite(DIR2_PINS[idx], HIGH);
+    pwm = -pwm;
+  }
+  analogWrite(PWM_PINS[idx], pwm);
+}
+
+void updateMotors() {
+  // Mecanum Inverse Kinematics (rad/s for each wheel
+  float geom = LX + LY;
+  float w_fl = (1.0 / WHEEL_RADIUS) * (target_vx - target_vy - geom * target_wz);
+  float w_fr = (1.0 / WHEEL_RADIUS) * (target_vx + target_vy + geom * target_wz);
+  float w_rl = (1.0 / WHEEL_RADIUS) * (target_vx + target_vy - geom * target_wz);
+  float w_rr = (1.0 / WHEEL_RADIUS) * (target_vx - target_vy + geom * target_wz);
+
+  setMotor(0, w_fl);
+  setMotor(1, w_fr);
+  setMotor(2, w_rl);
+  setMotor(3, w_rr);
+}
+
+void loop() {
+  if (Serial.available() > 0) {
+    String data = Serial.readStringUntil('\n');
+    if (data.startsWith("<") && data.endsWith(">")) {
+      data = data.substring(1, data.length() - 1);
+      int firstComma = data.indexOf(',');
+      int secondComma = data.lastIndexOf(',');
+      if (firstComma > 0 && secondComma > firstComma) {
+        target_vx = data.substring(0, firstComma).toFloat();
+        target_vy = data.substring(firstComma + 1, secondComma).toFloat();
+        target_wz = data.substring(secondComma + 1).toFloat();
+        last_cmd_time = millis();
+      }
+    }
+  }
+
+  if (millis() - last_cmd_time > 500) {
+    target_vx = 0.0;
+    target_vy = 0.0;
+    target_wz = 0.0;
+  }
+
+  updateMotors();
+
+  
+  if (millis() - last_odom_time >= 50) {
+    noInterrupts();
+    long t0 = enc_ticks[0], t1 = enc_ticks[1], t2 = enc_ticks[2], t3 = enc_ticks[3];
+    // Reset ticks after reading so Pi receives delta ticks
+    enc_ticks[0] = enc_ticks[1] = enc_ticks[2] = enc_ticks[3] = 0;
+    interrupts();
+
+    Serial.printf("E,%ld,%ld,%ld,%ld\n", t0, t1, t2, t3);
+    last_odom_time = millis();
+  }
+}
