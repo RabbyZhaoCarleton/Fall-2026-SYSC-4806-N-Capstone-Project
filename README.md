@@ -187,6 +187,17 @@ If it says `llvmpipe`, open a new terminal and check again. If it still does, re
 
 **The Gazebo window crashes**: the simulation keeps running without it. Use `gui:=false`; RViz shows everything needed.
 
+**Nav2 aborts goals with "Unable to transform robot pose into global plan's frame"**, explore_lite logs "extrapolation into the future", or the map stops updating for a few seconds at a time: the Ubuntu clock is jumping. This happens when the Windows clock is a few seconds off. WSL keeps setting the Ubuntu clock to Windows time while Ubuntu's own time service sets it back to internet time, and every jump back makes SLAM pause. Check with `journalctl --since "-2 min" | grep "Clock change detected"`: any output means the clock is jumping. To fix it:
+
+1. Correct the Windows clock: **Settings > Time & language > Date & time > Sync now**.
+2. Let WSL take its time from Windows only:
+
+```bash
+sudo systemctl disable --now systemd-timesyncd
+```
+
+3. Run `wsl --shutdown` in Windows PowerShell and open a new Ubuntu terminal, so Ubuntu starts again from the corrected Windows time.
+
 ## Raspberry Pi 5 (real robot)
 
 On the Pi, running Ubuntu 24.04, clone the repository to the same place and run the script in robot mode. It skips Gazebo and the simulation packages:
