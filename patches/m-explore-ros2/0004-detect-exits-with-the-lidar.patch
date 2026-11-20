@@ -135,11 +135,119 @@ index 0000000..3ca601e
 +}  // namespace explore
 +
 +#endif
+diff --git a/explore/include/explore/exit_watch.h b/explore/include/explore/exit_watch.h
+new file mode 100644
+index 0000000..8d1a07e
+--- /dev/null
++++ b/explore/include/explore/exit_watch.h
+@@ -0,0 +1,94 @@
++#ifndef EXIT_WATCH_H_
++#define EXIT_WATCH_H_
++
++#include <geometry_msgs/msg/point.hpp>
++
++namespace explore
++{
++/**
++ * @brief Decides that a frontier is a maze exit by watching it from nearby.
++ *
++ * Close to an inner frontier, the lidar maps the space behind it within a
++ * map update or two, so the unknown area around it shrinks. Behind an exit the
++ * lidar gets no return, which the map leaves unknown. If the robot stays near
++ * a frontier and the unknown area around it does not shrink for long enough,
++ * the frontier opens to the outside.
++ */
++class ExitWatch
++{
++public:
++  /**
++   * @param distance  how near (m) the robot must be to a frontier cell it can see
++   * @param time      how long (s) the area must stop shrinking
++   * @param min_growth fewest cells the unknown area must shrink by to count as growth
++   */
++  ExitWatch(double distance = 0.6, double time = 6.0, int min_growth = 8)
++    : distance_(distance), time_(time), min_growth_(min_growth)
++  {
++  }
++
++  void reset()
++  {
++    watching_ = false;
++  }
++
++  bool watching() const
++  {
++    return watching_;
++  }
++
++  /** @brief Where to count unknown cells: the frontier as it was when watching began. */
++  const geometry_msgs::msg::Point& center() const
++  {
++    return center_;
++  }
++
++  /**
++   * @param now        time in seconds
++   * @param distance   robot's distance to the nearest frontier cell it can see (m)
++   * @param centroid   the frontier's centre now; used when watching begins
++   * @param unknown    unknown cells around center() (around @p centroid when
++   *                   not watching yet)
++   * @return true once the frontier counts as an exit
++   */
++  bool update(double now, double distance, const geometry_msgs::msg::Point& centroid,
++              int unknown)
++  {
++    if (distance > distance_) {
++      watching_ = false;  // too far for the lidar to see behind it
++      return false;
++    }
++    if (!watching_) {
++      watching_ = true;
++      center_ = centroid;
++      start_ = now;
++      unknown_ = unknown;
++      return false;
++    }
++    if (unknown_ - unknown >= min_growth_) {
++      // the lidar is still mapping the space behind it: time again from here
++      start_ = now;
++      unknown_ = unknown;
++      return false;
++    }
++    return now - start_ >= time_;
++  }
++
++  /** @brief Seconds the area has gone without shrinking, or 0 when not watching. */
++  double quietFor(double now) const
++  {
++    return watching_ ? now - start_ : 0.0;
++  }
++
++private:
++  double distance_;
++  double time_;
++  int min_growth_;
++  bool watching_{false};
++  geometry_msgs::msg::Point center_;
++  double start_{0.0};
++  int unknown_{0};
++};
++}  // namespace explore
++
++#endif
 diff --git a/explore/include/explore/explore.h b/explore/include/explore/explore.h
-index 82df47e..6897d23 100644
+index 82df47e..eb95932 100644
 --- a/explore/include/explore/explore.h
 +++ b/explore/include/explore/explore.h
-@@ -46,9 +46,12 @@
+@@ -39,6 +39,7 @@
+ #define NAV_EXPLORE_H_
+ 
+ #include <explore/costmap_client.h>
++#include <explore/exit_watch.h>
+ #include <explore/frontier_memory.h>
+ #include <explore/frontier_search.h>
+ #include <geometry_msgs/msg/pose_stamped.hpp>
+@@ -46,9 +47,12 @@
  
  #include <chrono>
  #include <cmath>
@@ -152,7 +260,7 @@ index 82df47e..6897d23 100644
  #include <std_msgs/msg/bool.hpp>
  #include <std_msgs/msg/color_rgba.hpp>
  #include <string>
-@@ -97,6 +100,35 @@ private:
+@@ -97,6 +101,49 @@ private:
    void visualizeFrontiers(
        const std::vector<frontier_exploration::Frontier>& frontiers);
  
@@ -177,18 +285,32 @@ index 82df47e..6897d23 100644
 +  const frontier_exploration::Frontier* findCommitted(
 +      const std::vector<frontier_exploration::Frontier>& frontiers) const;
 +  /**
-+   * @brief Let go of the committed frontier if the lidar shows it is an exit
-+   * (or probably one, while open frontiers are left).
++   * @brief Let go of the committed frontier if it is a known maze exit.
 +   * @return true if the robot is no longer committed
 +   */
-+  bool leaveForExit(const std::vector<frontier_exploration::Frontier>& frontiers,
-+                    const frontier_exploration::Frontier& current);
++  bool leaveForExit(const frontier_exploration::Frontier& current);
++  /**
++   * @brief Once the robot is near the committed frontier, time how long the
++   * map around it goes without growing. Long enough, and nothing there is
++   * coming into view: the frontier opens to the outside, a maze exit.
++   * @return true if the frontier was found to be an exit (no longer committed)
++   */
++  bool watchForExit(const frontier_exploration::Frontier& current,
++                    const geometry_msgs::msg::Point& robot);
++  /**
++   * @brief Straight-line distance from @p robot to the nearest cell of
++   * @p frontier that no wall in the map hides, or infinity if all are hidden.
++   */
++  double visibleDistance(const frontier_exploration::Frontier& frontier,
++                         const geometry_msgs::msg::Point& robot);
++  /** @brief Unknown map cells within @p radius of @p center. */
++  int countUnknown(const geometry_msgs::msg::Point& center, double radius);
 +  void scanCallback(sensor_msgs::msg::LaserScan::ConstSharedPtr scan);
 +
    /**
     * @brief Keep pursuing the committed frontier, or let go of it.
     * @return true while the robot stays committed (nothing else to do this cycle)
-@@ -128,6 +160,15 @@ private:
+@@ -128,6 +175,15 @@ private:
      * @brief Publisher for exploration status updates (see ExploreStatus.msg for status values)
      */
    rclcpp::Publisher<explore_lite_msgs::msg::ExploreStatus>::SharedPtr status_pub_;
@@ -204,15 +326,15 @@ index 82df47e..6897d23 100644
  
    rclcpp::Logger logger_;
    tf2_ros::Buffer tf_buffer_;
-@@ -147,6 +188,7 @@ private:
+@@ -147,6 +203,7 @@ private:
    // The frontier the robot is committed to. It keeps that frontier until it is
    // explored, reached, or given up, even if another frontier scores better.
    bool committed_{false};
-+  bool committed_to_candidate_{false};  // it was already an exit candidate when chosen
++  ExitWatch watch_;  // the committed frontier, watched from nearby
    std::size_t committed_entry_{0};             // its entry in memory_
    geometry_msgs::msg::Point committed_goal_;   // goal sent to Nav2
    geometry_msgs::msg::Point committed_where_;  // where the frontier is now
-@@ -181,6 +223,12 @@ private:
+@@ -181,6 +238,14 @@ private:
    int max_frontier_attempts_;
    int nav2_retries_;
    double nav2_retry_delay_;
@@ -221,6 +343,8 @@ index 82df47e..6897d23 100644
 +  int exit_confirm_views_;
 +  double exit_view_separation_;
 +  double exit_confirm_distance_;
++  double exit_watch_time_;
++  double exit_watch_radius_;
 +  bool lidar_short_is_no_return_;
    bool visualize_;
    bool return_to_init_;
@@ -515,10 +639,18 @@ index 210812c..a741523 100644
    <depend>tf2</depend>
    <depend>tf2_ros</depend>
 diff --git a/explore/src/explore.cpp b/explore/src/explore.cpp
-index 4481701..22dcd85 100644
+index 4481701..e929211 100644
 --- a/explore/src/explore.cpp
 +++ b/explore/src/explore.cpp
-@@ -54,6 +54,9 @@ inline static bool same_point(const geometry_msgs::msg::Point& one,
+@@ -39,6 +39,7 @@
+ #include <explore/explore.h>
+ 
+ #include <algorithm>
++#include <limits>
+ #include <cstdio>
+ #include <string>
+ #include <thread>
+@@ -54,6 +55,9 @@ inline static bool same_point(const geometry_msgs::msg::Point& one,
  
  namespace explore
  {
@@ -528,7 +660,7 @@ index 4481701..22dcd85 100644
  Explore::Explore()
    : Node("explore_node")
    , logger_(this->get_logger())
-@@ -80,8 +83,31 @@ Explore::Explore()
+@@ -80,8 +84,40 @@ Explore::Explore()
    this->declare_parameter<int>("max_frontier_attempts", 3);
    this->declare_parameter<int>("nav2_retries", 2);
    this->declare_parameter<float>("nav2_retry_delay", 2.0);
@@ -542,6 +674,10 @@ index 4481701..22dcd85 100644
 +  this->declare_parameter<int>("exit_confirm_views", 2);
 +  this->declare_parameter<float>("exit_view_separation", 0.3);
 +  this->declare_parameter<float>("exit_confirm_distance", 0.25);
++  this->declare_parameter<float>("exit_watch_distance", 0.6);
++  this->declare_parameter<float>("exit_watch_time", 6.0);
++  this->declare_parameter<float>("exit_watch_radius", 0.5);
++  this->declare_parameter<float>("exit_watch_min_growth", 0.02);
 +  this->declare_parameter<bool>("lidar_short_is_no_return", false);
  
    double match_radius;
@@ -556,11 +692,30 @@ index 4481701..22dcd85 100644
 +  this->get_parameter("exit_confirm_views", exit_confirm_views_);
 +  this->get_parameter("exit_view_separation", exit_view_separation_);
 +  this->get_parameter("exit_confirm_distance", exit_confirm_distance_);
++  double exit_watch_distance, exit_watch_min_growth;
++  this->get_parameter("exit_watch_distance", exit_watch_distance);
++  this->get_parameter("exit_watch_time", exit_watch_time_);
++  this->get_parameter("exit_watch_radius", exit_watch_radius_);
++  this->get_parameter("exit_watch_min_growth", exit_watch_min_growth);
 +  this->get_parameter("lidar_short_is_no_return", lidar_short_is_no_return_);
    this->get_parameter("commit_timeout", commit_timeout_);
    this->get_parameter("exit_settle_time", exit_settle_time_);
    this->get_parameter("exit_reach_distance", exit_reach_distance_);
-@@ -122,6 +148,16 @@ Explore::Explore()
+@@ -106,6 +142,13 @@ Explore::Explore()
+       rclcpp_action::create_client<nav2_msgs::action::NavigateToPose>(
+           this, ACTION_NAME);
+ 
++  {
++    double cell = costmap_client_.getCostmap()->getResolution();
++    int min_growth = std::max(
++        1, static_cast<int>(std::lround(exit_watch_min_growth / (cell * cell))));
++    watch_ = ExitWatch(exit_watch_distance, exit_watch_time_, min_growth);
++  }
++
+   search_ = frontier_exploration::FrontierSearch(costmap_client_.getCostmap(),
+                                                  potential_scale_, gain_scale_,
+                                                  min_frontier_size, logger_);
+@@ -122,6 +165,16 @@ Explore::Explore()
    rclcpp::QoS status_qos(10);
    status_qos.transient_local();
    status_pub_ = this->create_publisher<explore_lite_msgs::msg::ExploreStatus>("explore/status", status_qos);
@@ -577,11 +732,11 @@ index 4481701..22dcd85 100644
  
    // Subscription to resume or stop exploration
    resume_subscription_ = this->create_subscription<std_msgs::msg::Bool>(
-@@ -152,6 +188,11 @@ Explore::Explore()
+@@ -152,6 +205,11 @@ Explore::Explore()
    exploring_timer_ = this->create_wall_timer(
        std::chrono::milliseconds((uint16_t)(1000.0 / planner_frequency_)),
        [this]() { makePlan(); });
-+  if (exit_detection_ && exit_check_frequency > 0.0) {
++  if (exit_check_frequency > 0.0) {
 +    exit_timer_ = this->create_wall_timer(
 +        std::chrono::milliseconds((int)(1000.0 / exit_check_frequency)),
 +        [this]() { updateFrontiers(); });
@@ -589,7 +744,7 @@ index 4481701..22dcd85 100644
    // Start exploration right away
    auto status_msg = explore_lite_msgs::msg::ExploreStatus();
    status_msg.status = explore_lite_msgs::msg::ExploreStatus::EXPLORATION_STARTED;
-@@ -183,6 +224,8 @@ void Explore::visualizeFrontiers(
+@@ -183,6 +241,8 @@ void Explore::visualizeFrontiers(
        std_msgs::msg::ColorRGBA().set__r(1.0).set__g(0.5).set__a(0.5);
    const auto purple =
        std_msgs::msg::ColorRGBA().set__r(0.6).set__b(1.0).set__a(0.5);
@@ -598,7 +753,7 @@ index 4481701..22dcd85 100644
  
    RCLCPP_DEBUG(logger_, "visualising %lu frontiers", frontiers.size());
    visualization_msgs::msg::MarkerArray markers_msg;
-@@ -217,8 +260,12 @@ void Explore::visualizeFrontiers(
+@@ -217,8 +277,12 @@ void Explore::visualizeFrontiers(
      m.scale.y = 0.1;
      m.scale.z = 0.1;
      m.points = frontier.points;
@@ -612,7 +767,7 @@ index 4481701..22dcd85 100644
        case FrontierMemory::State::POSTPONED:
          m.color = orange;
          break;
-@@ -269,15 +316,15 @@ void Explore::makePlan()
+@@ -269,15 +333,15 @@ void Explore::makePlan()
      RCLCPP_DEBUG(logger_, "frontier %zd cost: %f", i, frontiers[i].cost);
    }
  
@@ -633,31 +788,27 @@ index 4481701..22dcd85 100644
    if (stay) {
      return;
    }
-@@ -287,14 +334,19 @@ void Explore::makePlan()
+@@ -287,11 +351,16 @@ void Explore::makePlan()
      return;
    }
  
--  auto pick_open = [&]() {
-+  auto pick = [&](State state) {
++  // Probable exits are chosen like open frontiers, cheapest first: the lidar
++  // is often fooled by an inner opening that lines up with an exit, and
++  // putting them off makes the robot cross the maze back and forth. Getting
++  // close decides (see watchForExit), unless the lidar confirms it first.
+   auto pick_open = [&]() {
      return std::find_if(frontiers.begin(), frontiers.end(),
 -                        [this](const frontier_exploration::Frontier& f) {
 -                          return memory_.state(f) ==
 -                                 FrontierMemory::State::OPEN;
-+                        [this, state](const Frontier& f) {
-+                          return memory_.state(f) == state;
++                        [this](const Frontier& f) {
++                          State state = memory_.state(f);
++                          return state == State::OPEN ||
++                                 state == State::EXIT_CANDIDATE;
                          });
    };
-+  auto pick_open = [&]() { return pick(State::OPEN); };
    auto frontier = pick_open();
-+  if (frontier == frontiers.end()) {
-+    // Probable exits are left for last. Heading for one shows it to the lidar
-+    // from another position, which confirms it (or shows it is not an exit).
-+    frontier = pick(State::EXIT_CANDIDATE);
-+  }
-   if (frontier == frontiers.end()) {
-     // Everything else is explored: give the postponed frontiers another try.
-     std::size_t reopened = memory_.reopenPostponed();
-@@ -316,17 +368,13 @@ bool Explore::continueCommitment(
+@@ -316,17 +385,13 @@ bool Explore::continueCommitment(
      const std::vector<frontier_exploration::Frontier>& frontiers,
      const geometry_msgs::msg::Point& robot)
  {
@@ -674,13 +825,13 @@ index 4481701..22dcd85 100644
    if (current) {
      committed_where_ = current->centroid;
 +    memory_.track(committed_entry_, committed_where_);
-+    if (!settling_ && leaveForExit(frontiers, *current)) {
++    if (!settling_ && (leaveForExit(*current) || watchForExit(*current, robot))) {
 +      return false;
 +    }
    }
  
    if (settling_) {
-@@ -418,9 +466,253 @@ bool Explore::continueCommitment(
+@@ -418,9 +483,338 @@ bool Explore::continueCommitment(
    return true;
  }
  
@@ -696,33 +847,117 @@ index 4481701..22dcd85 100644
 +  return nullptr;
 +}
 +
-+bool Explore::leaveForExit(const std::vector<Frontier>& frontiers,
-+                           const Frontier& current)
++bool Explore::leaveForExit(const Frontier& current)
 +{
-+  State state = memory_.state(current);
-+  if (state == State::EXIT) {
-+    committed_ = false;
-+    RCLCPP_INFO(logger_,
-+                "Frontier at (%.2f, %.2f) is a maze exit: heading for another "
-+                "frontier",
-+                committed_where_.x, committed_where_.y);
-+    return true;
++  if (memory_.state(current) != State::EXIT) {
++    return false;
 +  }
-+  if (state == State::EXIT_CANDIDATE && !committed_to_candidate_) {
-+    bool open_left = std::any_of(frontiers.begin(), frontiers.end(),
-+                                 [this](const Frontier& f) {
-+                                   return memory_.state(f) == State::OPEN;
-+                                 });
-+    if (open_left) {
-+      committed_ = false;
-+      RCLCPP_INFO(logger_,
-+                  "Frontier at (%.2f, %.2f) looks like a maze exit: exploring "
-+                  "the open frontiers first",
-+                  committed_where_.x, committed_where_.y);
-+      return true;
++  committed_ = false;
++  watch_.reset();
++  RCLCPP_INFO(logger_,
++              "Frontier at (%.2f, %.2f) is a maze exit: heading for another "
++              "frontier",
++              committed_where_.x, committed_where_.y);
++  return true;
++}
++
++int Explore::countUnknown(const geometry_msgs::msg::Point& center, double radius)
++{
++  nav2_costmap_2d::Costmap2D* costmap = costmap_client_.getCostmap();
++  std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap->getMutex()));
++  const double res = costmap->getResolution();
++  const int r = static_cast<int>(std::ceil(radius / res));
++  int cx, cy;
++  costmap->worldToMapNoBounds(center.x, center.y, cx, cy);
++  const int size_x = static_cast<int>(costmap->getSizeInCellsX());
++  const int size_y = static_cast<int>(costmap->getSizeInCellsY());
++  int count = 0;
++  for (int y = cy - r; y <= cy + r; ++y) {
++    for (int x = cx - r; x <= cx + r; ++x) {
++      if ((x - cx) * (x - cx) + (y - cy) * (y - cy) > r * r) {
++        continue;
++      }
++      // Cells beyond the edge of the map are unknown too: the map grows to
++      // take in whatever the lidar sees there.
++      if (x < 0 || y < 0 || x >= size_x || y >= size_y ||
++          costmap->getCost(x, y) == nav2_costmap_2d::NO_INFORMATION) {
++        ++count;
++      }
 +    }
 +  }
-+  return false;
++  return count;
++}
++
++double Explore::visibleDistance(const Frontier& frontier,
++                                const geometry_msgs::msg::Point& robot)
++{
++  nav2_costmap_2d::Costmap2D* costmap = costmap_client_.getCostmap();
++  std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap->getMutex()));
++  unsigned int rx, ry;
++  if (!costmap->worldToMap(robot.x, robot.y, rx, ry)) {
++    return std::numeric_limits<double>::infinity();
++  }
++  auto wall = [costmap](int x, int y) {
++    unsigned char cost = costmap->getCost(x, y);
++    return cost >= nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE &&
++           cost != nav2_costmap_2d::NO_INFORMATION;
++  };
++  double best = std::numeric_limits<double>::infinity();
++  for (const auto& p : frontier.points) {
++    double d = FrontierMemory::distance(robot, p);
++    unsigned int px, py;
++    if (d >= best || !costmap->worldToMap(p.x, p.y, px, py)) {
++      continue;
++    }
++    // walk the cells between the robot and the frontier cell (Bresenham)
++    int x = rx, y = ry;
++    const int dx = std::abs(static_cast<int>(px) - x);
++    const int dy = -std::abs(static_cast<int>(py) - y);
++    const int sx = x < static_cast<int>(px) ? 1 : -1;
++    const int sy = y < static_cast<int>(py) ? 1 : -1;
++    int err = dx + dy;
++    bool hidden = false;
++    while (!(x == static_cast<int>(px) && y == static_cast<int>(py))) {
++      if (wall(x, y)) {
++        hidden = true;
++        break;
++      }
++      int e2 = 2 * err;
++      if (e2 >= dy) {
++        err += dy;
++        x += sx;
++      }
++      if (e2 <= dx) {
++        err += dx;
++        y += sy;
++      }
++    }
++    if (!hidden) {
++      best = d;
++    }
++  }
++  return best;
++}
++
++bool Explore::watchForExit(const Frontier& current,
++                           const geometry_msgs::msg::Point& robot)
++{
++  const auto& center = watch_.watching() ? watch_.center() : current.centroid;
++  int unknown = countUnknown(center, exit_watch_radius_);
++  if (!watch_.update(this->now().seconds(), visibleDistance(current, robot),
++                     current.centroid, unknown)) {
++    return false;
++  }
++  memory_.set(committed_entry_, State::EXIT, current.centroid);
++  committed_ = false;
++  watch_.reset();
++  RCLCPP_INFO(logger_,
++              "Frontier at (%.2f, %.2f) is a maze exit: the robot has had it "
++              "in view from within %.2f m and the map around it has not grown "
++              "for %.0f s. Heading for another frontier",
++              current.centroid.x, current.centroid.y,
++              visibleDistance(current, robot), exit_watch_time_);
++  return true;
 +}
 +
 +void Explore::scanCallback(sensor_msgs::msg::LaserScan::ConstSharedPtr scan)
@@ -804,8 +1039,8 @@ index 4481701..22dcd85 100644
 +    } else if (seen.after == State::EXIT_CANDIDATE) {
 +      RCLCPP_INFO(logger_,
 +                  "Frontier at (%.2f, %.2f) looks like a maze exit: the lidar "
-+                  "sees no return through %d of its %d points. It is left for "
-+                  "last and confirmed from another position",
++                  "sees no return through %d of its %d points. A look from "
++                  "another position, or getting close, decides",
 +                  f.centroid.x, f.centroid.y, evidence.no_return, evidence.points);
 +    } else if (seen.before == State::EXIT_CANDIDATE) {
 +      RCLCPP_INFO(logger_,
@@ -828,7 +1063,7 @@ index 4481701..22dcd85 100644
 +    if (current) {
 +      committed_where_ = current->centroid;
 +      memory_.track(committed_entry_, committed_where_);
-+      replan = leaveForExit(frontiers, *current);
++      replan = leaveForExit(*current) || watchForExit(*current, pose.position);
 +    }
 +  }
 +  if (replan) {
@@ -930,22 +1165,39 @@ index 4481701..22dcd85 100644
  void Explore::commitTo(const frontier_exploration::Frontier& frontier)
  {
    committed_ = true;
-+  committed_to_candidate_ = memory_.state(frontier) == State::EXIT_CANDIDATE;
++  watch_.reset();
++  bool candidate = memory_.state(frontier) == State::EXIT_CANDIDATE;
    settling_ = false;
    committed_goal_ = frontier.centroid;
    committed_where_ = frontier.centroid;
-@@ -429,7 +721,8 @@ void Explore::commitTo(const frontier_exploration::Frontier& frontier)
+@@ -429,7 +823,8 @@ void Explore::commitTo(const frontier_exploration::Frontier& frontier)
    commit_start_ = this->now();
    last_progress_ = commit_start_;
    prev_distance_ = frontier.min_distance;
 -  RCLCPP_INFO(logger_, "Heading for frontier at (%.2f, %.2f), attempt %d",
 +  RCLCPP_INFO(logger_, "Heading for %sfrontier at (%.2f, %.2f), attempt %d",
-+              committed_to_candidate_ ? "probable exit " : "",
++              candidate ? "probable exit " : "",
                committed_goal_.x, committed_goal_.y,
                memory_.attempts(committed_entry_));
    sendGoal(committed_goal_);
+@@ -687,6 +1082,7 @@ void Explore::stop(bool finished_exploring)
+ 
+   goal_active_ = false;
+   settling_ = false;
++  watch_.reset();
+   if (settle_timer_) {
+     settle_timer_->cancel();
+   }
+@@ -732,6 +1128,7 @@ void Explore::resume()
+   }
+   // don't count the paused time against the committed frontier
+   commit_start_ = this->now();
++  watch_.reset();
+   last_progress_ = commit_start_;
+   RCLCPP_INFO(logger_, "Exploration resuming.");
+   auto status_msg = explore_lite_msgs::msg::ExploreStatus();
 diff --git a/explore/test/test_explore.cpp b/explore/test/test_explore.cpp
-index d94278d..383da9e 100644
+index d94278d..b392b4c 100644
 --- a/explore/test/test_explore.cpp
 +++ b/explore/test/test_explore.cpp
 @@ -71,6 +71,7 @@ TEST(Explore, testSameGoal)
@@ -956,7 +1208,7 @@ index d94278d..383da9e 100644
  
  using explore::FrontierMemory;
  
-@@ -152,6 +153,231 @@ TEST(FrontierMemory, exitWinsWhenFrontiersOverlap)
+@@ -152,6 +153,278 @@ TEST(FrontierMemory, exitWinsWhenFrontiersOverlap)
    EXPECT_EQ(memory.state(frontier(0.0, 0.8, 0.0)), FrontierMemory::State::EXIT);
  }
  
@@ -1185,6 +1437,53 @@ index d94278d..383da9e 100644
 +  EXPECT_TRUE(memory.entries()[seen.index].exit_views.empty());
 +}
 +
++// ---------------------------------------------------------------- exit watch
++#include <explore/exit_watch.h>
++
++using explore::ExitWatch;
++
++TEST(ExitWatch, quietAreaNearAFrontierIsAnExit)
++{
++  ExitWatch watch(0.4, 6.0, 8);
++  auto c = point(1.0, 0.0);
++  EXPECT_FALSE(watch.update(0.0, 0.3, c, 150));
++  EXPECT_FALSE(watch.update(3.0, 0.3, c, 147));  // a few cells: not growth
++  EXPECT_FALSE(watch.update(5.9, 0.3, c, 147));
++  EXPECT_TRUE(watch.update(6.0, 0.3, c, 146));
++}
++
++TEST(ExitWatch, growingMapRestartsTheTimer)
++{
++  ExitWatch watch(0.4, 6.0, 8);
++  auto c = point(1.0, 0.0);
++  watch.update(0.0, 0.3, c, 150);
++  EXPECT_FALSE(watch.update(4.0, 0.3, c, 120));  // the lidar mapped 30 cells
++  EXPECT_FALSE(watch.update(9.0, 0.3, c, 118));
++  EXPECT_TRUE(watch.update(10.0, 0.3, c, 118));
++}
++
++TEST(ExitWatch, onlyWatchesFromNearby)
++{
++  ExitWatch watch(0.4, 6.0, 8);
++  auto c = point(1.0, 0.0);
++  EXPECT_FALSE(watch.update(0.0, 0.8, c, 150));
++  EXPECT_FALSE(watch.watching());
++  watch.update(1.0, 0.3, c, 150);
++  // backing away restarts the timer once the robot is near again
++  EXPECT_FALSE(watch.update(5.0, 0.6, c, 150));
++  EXPECT_FALSE(watch.update(6.0, 0.3, c, 150));
++  EXPECT_FALSE(watch.update(11.0, 0.3, c, 150));
++  EXPECT_TRUE(watch.update(12.0, 0.3, c, 150));
++}
++
++TEST(ExitWatch, countsAroundWhereTheFrontierWasWhenWatchingBegan)
++{
++  ExitWatch watch(0.4, 6.0, 8);
++  watch.update(0.0, 0.3, point(1.0, 0.0), 150);
++  watch.update(1.0, 0.3, point(1.3, 0.0), 150);
++  EXPECT_DOUBLE_EQ(watch.center().x, 1.0);
++}
++
  int main(int argc, char** argv)
  {
    testing::InitGoogleTest(&argc, argv);
@@ -1209,17 +1508,18 @@ index e71154a..e03b644 100644
  ament_export_dependencies(rosidl_default_runtime)
 diff --git a/explore_lite_msgs/msg/Frontier.msg b/explore_lite_msgs/msg/Frontier.msg
 new file mode 100644
-index 0000000..0c63627
+index 0000000..e696159
 --- /dev/null
 +++ b/explore_lite_msgs/msg/Frontier.msg
-@@ -0,0 +1,21 @@
+@@ -0,0 +1,22 @@
 +# One frontier found by explore_lite: an edge between explored free space and
 +# unexplored space, with what explore_lite has concluded about it.
 +
 +# state values
 +uint8 OPEN=0            # may be chosen as a goal
-+uint8 EXIT_CANDIDATE=1  # the lidar saw no return through it once: probably a maze exit; tried last
-+uint8 EXIT=2            # a maze exit (confirmed by the lidar or by reaching it); never a goal
++uint8 EXIT_CANDIDATE=1  # the lidar saw no return through it once: probably a maze exit; still a goal
++uint8 EXIT=2            # a maze exit (seen open from two positions, or the map stayed
++                        # unexplored there while the robot was near); never a goal
 +uint8 POSTPONED=3       # given up for now; retried once no open frontier is left
 +uint8 ABANDONED=4       # given up too often; never a goal again
 +

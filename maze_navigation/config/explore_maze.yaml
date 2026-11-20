@@ -37,9 +37,11 @@
     # maze exit stays unexplored and a frontier remains in the opening. When the
     # lidar looks through most of a frontier and gets no return, nothing lies
     # behind it within range: it opens to the outside. Such a frontier becomes
-    # an exit candidate (tried only after the open frontiers), and an exit once
-    # seen that way from a second position. Seeing walls behind a candidate
-    # makes it open again. The drive-up check above stays as a fallback.
+    # an exit candidate, and an exit once seen that way from a second position.
+    # Seeing walls behind a candidate makes it open again. Candidates are still
+    # chosen in the usual order: the lidar is often fooled by an inner opening
+    # that lines up with an exit, and putting candidates off made the robot
+    # cross the maze back and forth.
     exit_detection: true
     scan_topic: scan
     exit_check_frequency: 2.0      # Hz; judges frontiers between plans
@@ -57,3 +59,16 @@
     # reports 0. Check what the real lidar reports (ros2 topic echo /scan,
     # pointing it at open space) and set this true if it is 0.
     lidar_short_is_no_return: false
+
+    # Exit watch (patches/m-explore-ros2/0004). Once the robot is this near a
+    # cell of the frontier it is heading for, with no wall between them in the
+    # map, the lidar should map the space behind an inner frontier within a map
+    # update or two (slam_maze.yaml map_update_interval: 2 s). If the unknown
+    # area around the frontier does not shrink for exit_watch_time, nothing
+    # there is coming into view: the frontier is a maze exit, and the robot
+    # moves on to another frontier. Nav2 sometimes can't bring the robot closer
+    # than about 0.55 m to an exit, so keep this above that.
+    exit_watch_distance: 0.6       # m, straight line
+    exit_watch_time: 6.0           # s; keep it a few map updates long
+    exit_watch_radius: 0.5         # m around the frontier where unknown area is counted
+    exit_watch_min_growth: 0.02    # m² the unknown area must shrink by to count as new area

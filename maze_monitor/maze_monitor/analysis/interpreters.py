@@ -617,13 +617,13 @@ FRONTIER_KINDS = {
     'candidate': ('explore.exit_candidates', 'Exit candidates', 'info',
                   'Exploration spotted a probable maze exit',
                   'The lidar looked through most of this frontier and got no return: nothing '
-                  'lies behind it within lidar range. explore_lite explores the open frontiers '
-                  'first and confirms it from another position.'),
+                  'lies behind it within lidar range. A second look from another position '
+                  'confirms it, or the robot gets close and checks whether the map fills in.'),
     'exit': ('explore.exits', 'Maze exits', 'info',
              'Exploration found a maze exit',
              'This frontier opens to the outside: the lidar saw no return through it from two '
-             'positions, or the robot reached it and it stayed unexplored. explore_lite will '
-             'not drive to it again.'),
+             'positions, or the robot got close and the map around it stopped growing. '
+             'explore_lite will not drive to it again.'),
 }
 # explore_lite_msgs/msg/Frontier state values
 STATE_KINDS = {0: 'open', 1: 'candidate', 2: 'exit', 3: 'postponed', 4: 'abandoned'}
@@ -646,8 +646,9 @@ def exit_detail(frontier):
         return (f'The lidar saw no return through this frontier from {frontier.exit_views} '
                 'positions: nothing lies behind it within lidar range, so it opens to the '
                 'outside. explore_lite will not drive to it again.')
-    return ('The robot reached this frontier but it stayed unexplored, so it opens to the '
-            'outside. explore_lite will not drive to it again.')
+    return ('The robot got close to this frontier, but the map around it stopped growing: '
+            'the lidar gets nothing back from behind it, so it opens to the outside. '
+            'explore_lite will not drive to it again.')
 
 
 class ExplorationInterpreter(Interpreter):

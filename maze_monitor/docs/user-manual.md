@@ -425,10 +425,11 @@ Each procedure starts in the run manager with the run that went wrong.
     remaining frontiers are maze exits or were abandoned. Click their events
     to see where they are. The event details say how an exit was found: by
     the lidar seeing no return through it from two positions, or by the
-    robot reaching it. An exit in the middle of the maze found by reaching
-    it means the map didn't fill in within `exit_settle_time`; one found by
+    map not growing around it while the robot was close. An exit in the
+    middle of the maze found from close by means the map didn't fill in
+    within `exit_watch_time` (raise it in `explore_maze.yaml`); one found by
     the lidar means the lidar looked through it and out of a real exit from
-    two places (raise `exit_confirm_views` in `explore_maze.yaml`).
+    two places (raise `exit_confirm_views`).
 3.  An **Exploration stalled** event means that the map didn't grow for 60
     seconds while exploring.
 
@@ -470,8 +471,8 @@ mean, and where to look next.
 | Route got longer | Info | The planner switched to a longer route to the same goal. | The map: which passage turned out to be blocked. |
 | Exploration postponed a frontier | Info | explore_lite couldn't reach a frontier for now (Nav2 failure or a timeout). It retries it once no other frontier is left. | The frontier position on the map; goal failures before it. |
 | Exploration gave up on a frontier | Warning | explore_lite failed to reach a frontier `max_frontier_attempts` times and won't try it again. | The frontier position on the map; goal failures before it. |
-| Exploration spotted a probable maze exit | Info | The lidar looked through most of a frontier and got no return, so nothing lies behind it within lidar range. explore_lite explores the open frontiers first and confirms it from another position. | Whether the position is an opening in the outer wall. |
-| Exploration found a maze exit | Info | A frontier opens to the outside: the lidar saw no return through it from two positions, or the robot reached it and it stayed unexplored. explore_lite won't drive to it again. | Whether the position is really an opening in the outer wall. |
+| Exploration spotted a probable maze exit | Info | The lidar looked through most of a frontier and got no return, so nothing lies behind it within lidar range. A second look from another position confirms it, or the robot gets close and checks whether the map fills in. | Whether the position is an opening in the outer wall. |
+| Exploration found a maze exit | Info | A frontier opens to the outside: the lidar saw no return through it from two positions, or the robot got close and the map around it stopped growing. explore_lite won't drive to it again. | Whether the position is really an opening in the outer wall. |
 | Exploration stalled | Warning | The map didn't grow for 60 s while exploring. | Navigation card; whether the robot is stuck. |
 | Log messages in brackets, for example `[controller_server] …` | Warning or error | A node logged a warning or error. Repeats are merged and counted. | The node named in brackets. |
 
