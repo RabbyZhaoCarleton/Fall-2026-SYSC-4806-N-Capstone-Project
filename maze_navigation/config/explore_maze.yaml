@@ -72,3 +72,15 @@
     exit_watch_time: 6.0           # s; keep it a few map updates long
     exit_watch_radius: 0.5         # m around the frontier where unknown area is counted
     exit_watch_min_growth: 0.02    # m² the unknown area must shrink by to count as new area
+
+    # Stopping (patches/m-explore-ros2/0005). Exploration is over once no frontier
+    # is left to pick except maze exits and abandoned frontiers (given up after
+    # max_frontier_attempts). With abandoned frontiers left, the status is
+    # exploration_incomplete instead of exploration_complete. Running out can be
+    # brief (the map catching up with the lidar), so the frontiers are searched
+    # again after finish_confirm_time before stopping.
+    finish_confirm_time: 4.0       # s
+    # Once the robot is back at its start (return_to_init), or could not get
+    # there, explore_lite exits. Launch with shutdown_when_done:=true to stop
+    # everything else then too.
+    exit_when_done: true

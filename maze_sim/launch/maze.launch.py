@@ -7,7 +7,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (AppendEnvironmentVariable, DeclareLaunchArgument,
                             IncludeLaunchDescription, LogInfo, OpaqueFunction,
-                            TimerAction)
+                            Shutdown, TimerAction)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -117,6 +117,12 @@ def start_nav_and_explore(context):
         )]))
 
     if explore:
+        # explore_lite exits once the robot is back at its start (or could not get
+        # there). With shutdown_when_done, everything else stops then too, which
+        # also closes the run's recording.
+        on_exit = None
+        if is_true(LaunchConfiguration('shutdown_when_done').perform(context)):
+            on_exit = [Shutdown(reason='explore_lite has ended navigation')]
         if not os.path.isfile(explore_params):
             raise RuntimeError(f'Explore params file not found: {explore_params}')
         actions.append(LogInfo(
@@ -128,6 +134,7 @@ def start_nav_and_explore(context):
             name='explore_node',
             output='screen',
             parameters=[explore_params, {'use_sim_time': is_true(use_sim_time)}],
+            on_exit=on_exit,
         )]))
     return actions
 
@@ -200,7 +207,8 @@ def spawn_robot(context):
 
 
 MONITORED_ARGS = ('world', 'x_pose', 'y_pose', 'use_sim_time', 'slam', 'rviz', 'gui', 'nav',
-                  'explore', 'ekf', 'slam_params', 'nav_params', 'explore_params', 'ekf_params')
+                  'explore', 'shutdown_when_done', 'ekf', 'slam_params', 'nav_params',
+                  'explore_params', 'ekf_params')
 
 
 def start_monitor(context):
@@ -282,6 +290,11 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'explore', default_value='false',
             description='Start Nav2 and explore_lite for autonomous mapping'),
+        DeclareLaunchArgument(
+            'shutdown_when_done', default_value='false',
+            description='Stop everything (Gazebo, SLAM, Nav2, the recording) once '
+                        'explore_lite ends navigation, or if it exits for any '
+                        'other reason. Off: the rest keeps running to look at the map'),
         DeclareLaunchArgument(
             'nav_params',
             default_value=os.path.join(maze_navigation, 'config', 'nav2_maze.yaml'),

@@ -1,0 +1,376 @@
+diff --git a/explore/include/explore/explore.h b/explore/include/explore/explore.h
+index eb95932..e67fb40 100644
+--- a/explore/include/explore/explore.h
++++ b/explore/include/explore/explore.h
+@@ -40,6 +40,7 @@
+ 
+ #include <explore/costmap_client.h>
+ #include <explore/exit_watch.h>
++#include <explore/finish_check.h>
+ #include <explore/frontier_memory.h>
+ #include <explore/frontier_search.h>
+ #include <geometry_msgs/msg/pose_stamped.hpp>
+@@ -159,7 +160,20 @@ private:
+   /** @brief Wait for the map to settle, then decide if the frontier is an exit. */
+   void startSettling();
+   void sendGoal(const geometry_msgs::msg::Point& target);
+-  void finishExploring(const char* why);
++  /**
++   * @brief No frontier is left to pick: stop once that has held for
++   * finish_confirm_time, checking again at the end of it.
++   */
++  void noFrontiersLeft(const char* why,
++                       const std::vector<frontier_exploration::Frontier>& frontiers);
++  /**
++   * @brief Exploration is over: report it (incomplete if frontiers the robot
++   * could not reach are left), then return to the initial pose or end.
++   */
++  void finishExploring(const char* why,
++                       const std::vector<frontier_exploration::Frontier>& frontiers);
++  /** @brief Stop for good: stop the timers and, if exit_when_done, the node. */
++  void endNavigation(const char* why);
+ 
+   NavigationGoalHandle::SharedPtr navigation_goal_handle_;
+   // void
+@@ -228,6 +242,12 @@ private:
+   int return_attempts_{0};
+   rclcpp::TimerBase::SharedPtr return_timer_;
+ 
++  FinishCheck finish_check_;  // nothing left to pick: is exploration over?
++  rclcpp::TimerBase::SharedPtr finish_timer_;
++  bool done_{false};  // navigation ended (see endNavigation)
++  bool exit_when_done_{true};
++  rclcpp::TimerBase::SharedPtr shutdown_timer_;
++
+   // parameters
+   double planner_frequency_;
+   double potential_scale_, orientation_scale_, gain_scale_;
+diff --git a/explore/include/explore/finish_check.h b/explore/include/explore/finish_check.h
+new file mode 100644
+index 0000000..2305b15
+--- /dev/null
++++ b/explore/include/explore/finish_check.h
+@@ -0,0 +1,62 @@
++#ifndef FINISH_CHECK_H_
++#define FINISH_CHECK_H_
++
++namespace explore
++{
++/**
++ * @brief Decides when exploration is over.
++ *
++ * Running out of frontiers to pick can be brief: the search may run just
++ * after a frontier was judged and before the map has caught up with what the
++ * lidar just saw. So exploration is over only once nothing has been left to
++ * pick for @p confirm_time, checked again at the end of that time.
++ */
++class FinishCheck
++{
++public:
++  explicit FinishCheck(double confirm_time = 4.0) : confirm_time_(confirm_time)
++  {
++  }
++
++  /**
++   * @param now current time, s
++   * @param nothing_left true if no frontier is left to pick
++   * @return true once nothing has been left to pick for confirm_time
++   */
++  bool update(double now, bool nothing_left)
++  {
++    if (!nothing_left) {
++      pending_ = false;
++      return false;
++    }
++    if (!pending_) {
++      pending_ = true;
++      since_ = now;
++    }
++    return now - since_ >= confirm_time_;
++  }
++
++  /** @brief True while waiting to see if nothing stays left to pick. */
++  bool pending() const
++  {
++    return pending_;
++  }
++
++  void reset()
++  {
++    pending_ = false;
++  }
++
++  double confirmTime() const
++  {
++    return confirm_time_;
++  }
++
++private:
++  double confirm_time_;
++  bool pending_{false};
++  double since_{0.0};
++};
++}  // namespace explore
++
++#endif
+diff --git a/explore/src/explore.cpp b/explore/src/explore.cpp
+index e929211..76d0cf1 100644
+--- a/explore/src/explore.cpp
++++ b/explore/src/explore.cpp
+@@ -99,8 +99,15 @@ Explore::Explore()
+   this->declare_parameter<float>("exit_watch_radius", 0.5);
+   this->declare_parameter<float>("exit_watch_min_growth", 0.02);
+   this->declare_parameter<bool>("lidar_short_is_no_return", false);
++  // Stopping (patches/m-explore-ros2/0005)
++  this->declare_parameter<float>("finish_confirm_time", 4.0);
++  this->declare_parameter<bool>("exit_when_done", true);
+ 
+   double match_radius;
++  double finish_confirm_time;
++  this->get_parameter("finish_confirm_time", finish_confirm_time);
++  finish_check_ = FinishCheck(finish_confirm_time);
++  this->get_parameter("exit_when_done", exit_when_done_);
+   double exit_check_frequency;
+   std::string scan_topic;
+   this->get_parameter("exit_detection", exit_detection_);
+@@ -219,7 +226,9 @@ Explore::Explore()
+ 
+ Explore::~Explore()
+ {
+-  stop();
++  if (!done_) {
++    stop();
++  }
+ }
+ 
+ void Explore::resumeCallback(const std_msgs::msg::Bool::SharedPtr msg)
+@@ -347,7 +356,7 @@ void Explore::makePlan()
+   }
+ 
+   if (frontiers.empty()) {
+-    finishExploring("No frontiers found");
++    noFrontiersLeft("No frontiers found", frontiers);
+     return;
+   }
+ 
+@@ -375,12 +384,42 @@ void Explore::makePlan()
+     }
+   }
+   if (frontier == frontiers.end()) {
+-    finishExploring("Only maze exits and abandoned frontiers are left");
++    noFrontiersLeft("Only maze exits and abandoned frontiers are left", frontiers);
+     return;
+   }
++  if (finish_check_.pending()) {
++    RCLCPP_INFO(logger_,
++                "Checking again before stopping found a frontier to explore");
++    finish_check_.reset();
++  }
+   commitTo(*frontier);
+ }
+ 
++void Explore::noFrontiersLeft(const char* why,
++                              const std::vector<Frontier>& frontiers)
++{
++  bool checking = finish_check_.pending();
++  if (finish_check_.update(this->now().seconds(), true)) {
++    finishExploring(why, frontiers);
++    return;
++  }
++  if (checking) {
++    return;  // the check is already under way
++  }
++  RCLCPP_INFO(logger_, "%s; checking again in %.0f s before stopping", why,
++              finish_check_.confirmTime());
++  // on the node's clock, so it follows simulation time
++  finish_timer_ = rclcpp::create_timer(
++      this, this->get_clock(),
++      rclcpp::Duration::from_seconds(finish_check_.confirmTime() + 0.1),
++      [this]() {
++        finish_timer_->cancel();
++        if (finish_check_.pending()) {
++          makePlan();
++        }
++      });
++}
++
+ bool Explore::continueCommitment(
+     const std::vector<frontier_exploration::Frontier>& frontiers,
+     const geometry_msgs::msg::Point& robot)
+@@ -917,13 +956,58 @@ void Explore::sendGoal(const geometry_msgs::msg::Point& target)
+   move_base_client_->async_send_goal(goal, send_goal_options);
+ }
+ 
+-void Explore::finishExploring(const char* why)
++void Explore::finishExploring(const char* why,
++                              const std::vector<Frontier>& frontiers)
+ {
+-  RCLCPP_WARN(logger_, "%s, stopping.", why);
++  finish_check_.reset();
++  // Frontiers the robot gave up on are still unexplored: the map is not
++  // complete, so do not report it as such.
++  std::string abandoned;
++  int count = 0;
++  for (const auto& f : frontiers) {
++    if (memory_.state(f) == State::ABANDONED) {
++      char where[32];
++      std::snprintf(where, sizeof(where), "%s(%.2f, %.2f)", count ? ", " : "",
++                    f.centroid.x, f.centroid.y);
++      abandoned += where;
++      ++count;
++    }
++  }
+   auto status_msg = explore_lite_msgs::msg::ExploreStatus();
+-  status_msg.status = explore_lite_msgs::msg::ExploreStatus::EXPLORATION_COMPLETE;
++  if (count > 0) {
++    RCLCPP_WARN(logger_,
++                "%s, stopping. Exploration is incomplete: the robot could not "
++                "reach %d frontier(s) at %s",
++                why, count, abandoned.c_str());
++    status_msg.status = explore_lite_msgs::msg::ExploreStatus::EXPLORATION_INCOMPLETE;
++  } else {
++    RCLCPP_WARN(logger_, "%s, stopping.", why);
++    status_msg.status = explore_lite_msgs::msg::ExploreStatus::EXPLORATION_COMPLETE;
++  }
+   status_pub_->publish(status_msg);
+   stop(true);
++  if (!returning_) {
++    endNavigation("Exploration is over");
++  }
++}
++
++void Explore::endNavigation(const char* why)
++{
++  done_ = true;
++  exploring_timer_->cancel();
++  if (exit_timer_) {
++    exit_timer_->cancel();
++  }
++  if (!exit_when_done_) {
++    RCLCPP_INFO(logger_, "%s: navigation has ended.", why);
++    return;
++  }
++  RCLCPP_INFO(logger_, "%s: navigation has ended, shutting down.", why);
++  // Give the last status message a moment to go out before the node exits.
++  shutdown_timer_ = this->create_wall_timer(std::chrono::seconds(1), [this]() {
++    shutdown_timer_->cancel();
++    rclcpp::shutdown();
++  });
+ }
+ 
+ void Explore::returnToInitialPose()
+@@ -959,6 +1043,7 @@ void Explore::returnToInitialPose()
+             status_msg.status = explore_lite_msgs::msg::ExploreStatus::RETURNED_TO_ORIGIN;
+             status_pub_->publish(status_msg);
+             RCLCPP_INFO(logger_, "Successfully returned to initial pose.");
++            endNavigation("Back at the initial pose");
+             break;
+           }
+           case rclcpp_action::ResultCode::CANCELED:
+@@ -982,6 +1067,10 @@ void Explore::retryReturn(const char* what)
+                  "The goal to return to the initial pose %s; giving up after "
+                  "%d attempts.",
+                  what, return_attempts_);
++    auto status_msg = explore_lite_msgs::msg::ExploreStatus();
++    status_msg.status = explore_lite_msgs::msg::ExploreStatus::RETURN_FAILED;
++    status_pub_->publish(status_msg);
++    endNavigation("Could not return to the initial pose");
+     return;
+   }
+   // Nav2 cancels or fails a goal at once for brief reasons (a cancel meant for
+@@ -1089,6 +1178,10 @@ void Explore::stop(bool finished_exploring)
+   if (retry_timer_) {
+     retry_timer_->cancel();
+   }
++  finish_check_.reset();
++  if (finish_timer_) {
++    finish_timer_->cancel();
++  }
+   // Only publish paused status if manually stopped (not finished exploring)
+   if (!finished_exploring) {
+     auto status_msg = explore_lite_msgs::msg::ExploreStatus();
+@@ -1123,6 +1216,10 @@ void Explore::resume()
+ {
+   // exploring again: drop any pending return to the initial pose
+   returning_ = false;
++  done_ = false;
++  if (exit_timer_) {
++    exit_timer_->reset();
++  }
+   if (return_timer_) {
+     return_timer_->cancel();
+   }
+diff --git a/explore/test/test_explore.cpp b/explore/test/test_explore.cpp
+index b392b4c..7392e5f 100644
+--- a/explore/test/test_explore.cpp
++++ b/explore/test/test_explore.cpp
+@@ -425,6 +425,44 @@ TEST(ExitWatch, countsAroundWhereTheFrontierWasWhenWatchingBegan)
+   EXPECT_DOUBLE_EQ(watch.center().x, 1.0);
+ }
+ 
++#include <explore/finish_check.h>
++
++using explore::FinishCheck;
++
++TEST(FinishCheck, waitsBeforeStopping)
++{
++  FinishCheck check(4.0);
++  EXPECT_FALSE(check.update(10.0, true));
++  EXPECT_TRUE(check.pending());
++  EXPECT_FALSE(check.update(13.9, true));
++  EXPECT_TRUE(check.update(14.0, true));
++}
++
++TEST(FinishCheck, frontierFoundOnRecheckKeepsExploring)
++{
++  FinishCheck check(4.0);
++  check.update(10.0, true);
++  EXPECT_FALSE(check.update(14.0, false));
++  EXPECT_FALSE(check.pending());
++  // running out again starts a new wait
++  EXPECT_FALSE(check.update(20.0, true));
++  EXPECT_TRUE(check.update(24.0, true));
++}
++
++TEST(FinishCheck, resetStartsOver)
++{
++  FinishCheck check(4.0);
++  check.update(10.0, true);
++  check.reset();
++  EXPECT_FALSE(check.update(14.0, true));
++}
++
++TEST(FinishCheck, zeroConfirmTimeStopsAtOnce)
++{
++  FinishCheck check(0.0);
++  EXPECT_TRUE(check.update(10.0, true));
++}
++
+ int main(int argc, char** argv)
+ {
+   testing::InitGoogleTest(&argc, argv);
+diff --git a/explore_lite_msgs/msg/ExploreStatus.msg b/explore_lite_msgs/msg/ExploreStatus.msg
+index efdd2b9..29d41a6 100644
+--- a/explore_lite_msgs/msg/ExploreStatus.msg
++++ b/explore_lite_msgs/msg/ExploreStatus.msg
+@@ -3,15 +3,20 @@
+ # EXPLORATION_IN_PROGRESS: Exploration resumed after pause
+ # EXPLORATION_PAUSED: Exploration manually stopped via /explore/resume topic
+ # EXPLORATION_COMPLETE: No frontiers remaining, exploration finished
++# EXPLORATION_INCOMPLETE: Exploration finished, but frontiers the robot could not
++#   reach (abandoned) are left unexplored
+ # RETURNING_TO_ORIGIN: Robot navigating back to initial pose (if return_to_init: true)
+ # RETURNED_TO_ORIGIN: Robot successfully reached initial pose
++# RETURN_FAILED: Robot could not get back to its initial pose and gave up
+ 
+ string EXPLORATION_STARTED=exploration_started
+ string EXPLORATION_IN_PROGRESS=exploration_in_progress
+ string EXPLORATION_PAUSED=exploration_paused
+ string EXPLORATION_COMPLETE=exploration_complete
++string EXPLORATION_INCOMPLETE=exploration_incomplete
+ string RETURNING_TO_ORIGIN=returning_to_origin
+ string RETURNED_TO_ORIGIN=returned_to_origin
++string RETURN_FAILED=return_failed
+ 
+ # Current exploration status
+ string status

@@ -747,6 +747,13 @@ class ExplorationInterpreter(Interpreter):
             detail = ''
             if msg.status == 'exploration_complete':
                 detail = 'No reachable frontiers are left.'
+            elif msg.status == 'exploration_incomplete':
+                sev = 'warning'
+                detail = ('Only maze exits and frontiers the robot could not reach '
+                          'are left; those frontiers are unexplored.')
+            elif msg.status == 'return_failed':
+                sev = 'warning'
+                detail = 'The robot could not get back to its starting point.'
             ctx.event(t, sev, 'exploration', f'Exploration: {text}', detail)
 
     def tick(self, ctx, t):
