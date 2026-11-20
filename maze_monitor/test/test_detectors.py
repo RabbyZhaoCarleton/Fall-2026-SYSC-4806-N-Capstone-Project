@@ -225,3 +225,45 @@ def test_frontier_states_from_marker_colours():
     assert tl.value('explore.postponed', 3.0) == 1
     assert tl.value('explore.exits', 3.0) == 1
     assert tl.value('explore.blacklisted', 3.0) == 1
+
+
+def test_marker_colours_include_exit_candidates():
+    yellow = (1., .9, 0.)
+    f = Feeder()
+    f.feed(1.0, '/explore/frontiers', _frontier_markers([(0.0, 0.0, yellow)]))
+    tl = f.finish(2.0)
+    assert tl.value('explore.exit_candidates', 2.0) == 1
+    assert tl.value('explore.postponed', 2.0) == 0
+
+
+def _frontier_states(frontiers):
+    """FrontierArray like explore_lite's: (x, y, state, exit_views) per frontier."""
+    from explore_lite_msgs.msg import Frontier, FrontierArray
+    out = FrontierArray()
+    for x, y, state, views in frontiers:
+        fr = Frontier(state=state, exit_views=views)
+        fr.centroid.x, fr.centroid.y = x, y
+        out.frontiers.append(fr)
+    return out
+
+
+def test_frontier_states_from_explore_lite():
+    from explore_lite_msgs.msg import Frontier
+    f = Feeder()
+    f.feed(1.0, '/explore/frontier_states', _frontier_states(
+        [(0.0, 0.0, Frontier.OPEN, 0), (1.5, 0.0, Frontier.EXIT_CANDIDATE, 1)]))
+    # the marker colours that come with it are ignored: no double counting
+    f.feed(1.1, '/explore/frontiers', _frontier_markers([(1.5, 0.0, (1., .9, 0.))]))
+    f.feed(2.0, '/explore/frontier_states', _frontier_states(
+        [(0.0, 0.0, Frontier.OPEN, 0), (1.5, 0.0, Frontier.EXIT, 2)]))
+    f.feed(2.0, '/explore/exits', _frontier_states([(1.5, 0.0, Frontier.EXIT, 2)]))
+    tl = f.finish(3.0)
+    events = f.events(category='exploration')
+    assert [e.title for e in events] == [
+        'Exploration spotted a probable maze exit at (1.50, 0.00)',
+        'Exploration found a maze exit at (1.50, 0.00)']
+    assert 'lidar saw no return' in events[1].detail
+    assert tl.value('explore.frontiers', 3.0) == 2
+    assert tl.value('explore.exit_candidates', 3.0) == 0
+    assert tl.value('explore.exits', 3.0) == 1
+    assert tl.value('explore.exit_list', 3.0) == '(1.50, 0.00)'

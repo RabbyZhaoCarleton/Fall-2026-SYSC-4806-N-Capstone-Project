@@ -92,7 +92,7 @@ same thing everywhere in the monitor.
 | Blue   | Intent: what the robot is told or plans. For example, speed commands, the planned path, and the goal. |
 | Black  | Reality: what the robot measured or did. For example, odometry speed, position, and trail. |
 | Gray   | No data, old data, or unknown map area. |
-| Purple | Exploration frontiers. |
+| Purple | Exploration frontiers. A green ring marks a maze exit (dashed: a probable exit, not yet confirmed). |
 
 Blue next to black shows whether the robot does what it is told. For example,
 a blue speed bar with no black bar under it means that the robot is told to
@@ -123,7 +123,10 @@ The map shows the SLAM map with these overlays:
 
 *   The robot as a circle with a line for its heading, and its trail in black.
 *   The planned path and the goal (X) in blue.
-*   Exploration frontiers in purple.
+*   Exploration frontiers in purple: the frontier cells and a dot at the
+    centre. Postponed frontiers are gray and abandoned ones amber. A maze exit
+    has a green ring labelled **exit**; a probable exit that the lidar saw
+    no return through once has a dashed ring labelled **exit?**.
 *   Lidar points in gray. Clear **Lidar** to hide them.
 *   Event marks: amber and red dots where warnings and errors happened. A ring
     marks events that are active at the cursor. Click a dot to move the cursor
@@ -174,7 +177,8 @@ planner failures.
 
 The explore_lite status, known map area and its growth over the last 30
 seconds, the number of frontiers, and how many frontiers explore_lite
-postponed, abandoned, or recognised as maze exits.
+postponed, abandoned, considers probable exits, or recognised as maze exits,
+with the positions of the exits.
 
 ### Health
 
@@ -419,9 +423,12 @@ Each procedure starts in the run manager with the run that went wrong.
     number of frontiers left, and the abandoned frontiers.
 2.  If frontiers are left but the status is **exploration complete**, all
     remaining frontiers are maze exits or were abandoned. Click their events
-    to see where they are. An exit in the middle of the maze means the robot
-    reached a frontier that the map didn't fill in within
-    `exit_settle_time`.
+    to see where they are. The event details say how an exit was found: by
+    the lidar seeing no return through it from two positions, or by the
+    robot reaching it. An exit in the middle of the maze found by reaching
+    it means the map didn't fill in within `exit_settle_time`; one found by
+    the lidar means the lidar looked through it and out of a real exit from
+    two places (raise `exit_confirm_views` in `explore_maze.yaml`).
 3.  An **Exploration stalled** event means that the map didn't grow for 60
     seconds while exploring.
 
@@ -463,7 +470,8 @@ mean, and where to look next.
 | Route got longer | Info | The planner switched to a longer route to the same goal. | The map: which passage turned out to be blocked. |
 | Exploration postponed a frontier | Info | explore_lite couldn't reach a frontier for now (Nav2 failure or a timeout). It retries it once no other frontier is left. | The frontier position on the map; goal failures before it. |
 | Exploration gave up on a frontier | Warning | explore_lite failed to reach a frontier `max_frontier_attempts` times and won't try it again. | The frontier position on the map; goal failures before it. |
-| Exploration found a maze exit | Info | The robot reached a frontier, but it stayed unexplored because it opens to the outside. explore_lite won't drive to it again. | Whether the position is really an opening in the outer wall. |
+| Exploration spotted a probable maze exit | Info | The lidar looked through most of a frontier and got no return, so nothing lies behind it within lidar range. explore_lite explores the open frontiers first and confirms it from another position. | Whether the position is an opening in the outer wall. |
+| Exploration found a maze exit | Info | A frontier opens to the outside: the lidar saw no return through it from two positions, or the robot reached it and it stayed unexplored. explore_lite won't drive to it again. | Whether the position is really an opening in the outer wall. |
 | Exploration stalled | Warning | The map didn't grow for 60 s while exploring. | Navigation card; whether the robot is stuck. |
 | Log messages in brackets, for example `[controller_server] …` | Warning or error | A node logged a warning or error. Repeats are merged and counted. | The node named in brackets. |
 

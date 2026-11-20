@@ -231,7 +231,7 @@ a periodic `tick`.
 | Clearance     | `/scan`                                        | Clearance per sector, nearest obstacle, close-to-wall and contact detection, wheel-slip detection |
 | Impact        | `/imu`                                         | Sudden horizontal acceleration, classified as a bump (wall in the direction of travel) or a jolt (abrupt stop in open space) |
 | Navigation    | Nav2 action status and feedback, `/plan`, `/behavior_tree_log` | Goal state, distance remaining, path length, replans, recoveries, planner and controller failures |
-| Exploration   | `/map`, `/explore/frontiers`, `/explore/status` | Known area, growth rate, frontiers, blacklisted frontiers, stalled exploration |
+| Exploration   | `/map`, `/explore/frontier_states` (or the `/explore/frontiers` marker colours in older runs), `/explore/exits`, `/explore/status` | Known area, growth rate, frontiers by state, probable and confirmed exits, stalled exploration |
 | Logs          | `/rosout`                                      | Warnings and errors from all nodes. Messages from the same node that differ only in numbers are merged into one event with a count, so 80 "worldToMap failed: mx,my: 30,11" lines become one. |
 | Health        | All topics, `/clock`                           | Message rates, silent topics, simulation real-time factor |
 
@@ -373,7 +373,7 @@ same thing everywhere:
 | Blue  | Intent: what the robot was told or plans (commands, planned path, goal) |
 | Black | Reality: what the robot measured or did (odometry, pose, trail) |
 | Gray  | No data, stale data, or unknown map area |
-| Purple | Exploration frontiers |
+| Purple | Exploration frontiers (green ring: maze exit) |
 
 The convention "blue is intent, black is reality" makes mismatches visible.
 For example, a blue speed bar next to an empty black one means the robot is

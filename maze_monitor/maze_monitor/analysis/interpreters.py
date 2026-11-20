@@ -22,6 +22,7 @@ NAV_FEEDBACK = 'nav2_msgs/action/NavigateToPose_FeedbackMessage'
 BT_LOG = 'nav2_msgs/msg/BehaviorTreeLog'
 MARKERS = 'visualization_msgs/msg/MarkerArray'
 EXPLORE_STATUS = 'explore_lite_msgs/msg/ExploreStatus'
+FRONTIER_STATES = 'explore_lite_msgs/msg/FrontierArray'
 LOG = 'rcl_interfaces/msg/Log'
 CLOCK = 'rosgraph_msgs/msg/Clock'
 
@@ -599,8 +600,10 @@ class NavigationInterpreter(Interpreter):
 
 
 # ======================================================================== exploration
-# explore_lite (with the capstone frontier-commitment patch) colours frontiers:
-# blue open, orange postponed, purple maze exit, red abandoned.
+# explore_lite (capstone patches 0002-0004) gives each frontier a state. It
+# publishes them on /explore/frontier_states (patch 0004) and as marker colours on
+# /explore/frontiers: blue open, yellow exit candidate, orange postponed, purple
+# maze exit, red abandoned. Runs recorded before patch 0004 only have the colours.
 FRONTIER_KINDS = {
     'abandoned': ('explore.blacklisted', 'Abandoned frontiers', 'warning',
                   'Exploration gave up on a frontier',
@@ -611,11 +614,19 @@ FRONTIER_KINDS = {
                   'Exploration postponed a frontier',
                   'explore_lite could not reach this frontier for now (Nav2 failure, a timeout, '
                   'or a wall cutting it off). It will retry it once no other frontier is left.'),
+    'candidate': ('explore.exit_candidates', 'Exit candidates', 'info',
+                  'Exploration spotted a probable maze exit',
+                  'The lidar looked through most of this frontier and got no return: nothing '
+                  'lies behind it within lidar range. explore_lite explores the open frontiers '
+                  'first and confirms it from another position.'),
     'exit': ('explore.exits', 'Maze exits', 'info',
              'Exploration found a maze exit',
-             'The robot reached this frontier but it stayed unexplored, so it opens to the '
-             'outside. explore_lite will not drive to it again.'),
+             'This frontier opens to the outside: the lidar saw no return through it from two '
+             'positions, or the robot reached it and it stayed unexplored. explore_lite will '
+             'not drive to it again.'),
 }
+# explore_lite_msgs/msg/Frontier state values
+STATE_KINDS = {0: 'open', 1: 'candidate', 2: 'exit', 3: 'postponed', 4: 'abandoned'}
 
 
 def frontier_kind(color):
@@ -623,26 +634,63 @@ def frontier_kind(color):
     if color.b > 0.8 and color.r > 0.4:
         return 'exit'
     if color.r > 0.8 and color.b < 0.3:
+        if color.g > 0.75:
+            return 'candidate'
         return 'postponed' if color.g > 0.3 else 'abandoned'
     return None
 
 
+def exit_detail(frontier):
+    """How explore_lite decided that a frontier (explore_lite_msgs/Frontier) is an exit."""
+    if frontier.exit_views >= 2:
+        return (f'The lidar saw no return through this frontier from {frontier.exit_views} '
+                'positions: nothing lies behind it within lidar range, so it opens to the '
+                'outside. explore_lite will not drive to it again.')
+    return ('The robot reached this frontier but it stayed unexplored, so it opens to the '
+            'outside. explore_lite will not drive to it again.')
+
+
 class ExplorationInterpreter(Interpreter):
-    types = (GRID, MARKERS, EXPLORE_STATUS)
+    types = (GRID, MARKERS, EXPLORE_STATUS, FRONTIER_STATES)
 
     def __init__(self):
         self.last_known = 0.0
         self.last_growth_t = None
-        # frontier positions already reported, per marker colour class
-        self.reported = {kind: set() for kind in FRONTIER_KINDS}
+        # frontier positions already reported, per state
+        self.reported = {kind: [] for kind in FRONTIER_KINDS}
         self.status = None
+        self.typed = False  # /explore/frontier_states seen: ignore the marker colours
 
     def accepts(self, topic, type_name):
         if type_name == GRID:
             return topic == '/map'
         if type_name == MARKERS:
             return topic.endswith('frontiers')
+        if type_name == FRONTIER_STATES:
+            return topic.endswith('frontier_states') or topic.endswith('exits')
         return type_name == EXPLORE_STATUS
+
+    def _report(self, ctx, t, found):
+        """Emit counts per state and an event for each newly seen frontier in that state.
+
+        found: kind -> list of (x, y, detail or None)
+        """
+        for kind, (key, label, severity, title, detail) in FRONTIER_KINDS.items():
+            ctx.emit(t, key, float(len(found[kind])), label, '')
+            for x, y, own_detail in found[kind]:
+                # a frontier drifts as the map grows: one event per place
+                # (explore_lite's frontier_match_radius)
+                seen = self.reported[kind]
+                if x is None:
+                    if None in seen:
+                        continue
+                    seen.append(None)
+                else:
+                    if any(p is not None and math.hypot(x - p[0], y - p[1]) < 0.3 for p in seen):
+                        continue
+                    seen.append((x, y))
+                ctx.event(t, severity, 'exploration', f'{title} at {fmt_xy(x, y)}',
+                          own_detail or detail, x=x, y=y)
 
     def on_message(self, ctx, t, topic, msg):
         name = type(msg).__name__
@@ -658,7 +706,24 @@ class ExplorationInterpreter(Interpreter):
             if known > self.last_known + 0.02 or self.last_growth_t is None:
                 self.last_growth_t = t
                 self.last_known = known
+        elif name == 'FrontierArray':
+            if topic.endswith('exits'):
+                text = '; '.join(f'({f.centroid.x:.2f}, {f.centroid.y:.2f})'
+                                 for f in msg.frontiers)
+                ctx.emit(t, 'explore.exit_list', text or '—', 'Exit positions', numeric=False)
+                return
+            self.typed = True
+            ctx.emit(t, 'explore.frontiers', float(len(msg.frontiers)), 'Frontiers', '')
+            found = {kind: [] for kind in FRONTIER_KINDS}
+            for f in msg.frontiers:
+                kind = STATE_KINDS.get(f.state)
+                if kind in found:
+                    detail = exit_detail(f) if kind == 'exit' else None
+                    found[kind].append((f.centroid.x, f.centroid.y, detail))
+            self._report(ctx, t, found)
         elif name == 'MarkerArray':
+            if self.typed:
+                return
             spheres = [m for m in msg.markers if m.action == 0 and m.type == 2]
             centroids = {m.id: (m.pose.position.x, m.pose.position.y) for m in spheres}
             ctx.emit(t, 'explore.frontiers', float(len(spheres)), 'Frontiers', '')
@@ -669,16 +734,8 @@ class ExplorationInterpreter(Interpreter):
                 if m.action == 0 and m.type == 8:
                     kind = frontier_kind(m.color)
                     if kind:
-                        found[kind].append(centroids.get(m.id + 1, (None, None)))
-            for kind, (key, label, severity, title, detail) in FRONTIER_KINDS.items():
-                ctx.emit(t, key, float(len(found[kind])), label, '')
-                for x, y in found[kind]:
-                    spot = (None, None) if x is None else (round(x, 1), round(y, 1))
-                    if spot in self.reported[kind]:
-                        continue
-                    self.reported[kind].add(spot)
-                    ctx.event(t, severity, 'exploration', f'{title} at {fmt_xy(x, y)}',
-                              detail, x=x, y=y)
+                        found[kind].append(centroids.get(m.id + 1, (None, None)) + (None,))
+            self._report(ctx, t, found)
         elif name == 'ExploreStatus':
             if msg.status == self.status:
                 return

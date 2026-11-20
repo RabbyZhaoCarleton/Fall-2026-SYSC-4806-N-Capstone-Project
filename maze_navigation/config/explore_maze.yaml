@@ -31,3 +31,29 @@
     exit_settle_time: 4.0        # s
     # How close a frontier must be to a remembered one to count as the same.
     frontier_match_radius: 0.3   # m
+
+    # Lidar exit detection (patches/m-explore-ros2/0004). A ray that hits nothing
+    # within lidar range is left out of the SLAM map, so the space outside a
+    # maze exit stays unexplored and a frontier remains in the opening. When the
+    # lidar looks through most of a frontier and gets no return, nothing lies
+    # behind it within range: it opens to the outside. Such a frontier becomes
+    # an exit candidate (tried only after the open frontiers), and an exit once
+    # seen that way from a second position. Seeing walls behind a candidate
+    # makes it open again. The drive-up check above stays as a fallback.
+    exit_detection: true
+    scan_topic: scan
+    exit_check_frequency: 2.0      # Hz; judges frontiers between plans
+    exit_no_return_ratio: 0.75     # share of a frontier's points with no return
+    exit_min_no_return_points: 5   # and at least this many of them
+    exit_disprove_ratio: 0.25      # below this share (of the seen-through points) it is not an exit
+    exit_confirm_views: 2          # positions it must be seen open from
+    exit_view_separation: 0.3      # m between those positions
+    # Within this distance (around walls) one look is enough: the rays through
+    # the frontier fan out so widely that an inner opening would show walls.
+    # A frontier 0.4 m away was seen open through an inner doorway lined up
+    # with an exit, so keep this well below that.
+    exit_confirm_distance: 0.25    # m
+    # Gazebo reports infinity for "no return"; the TurtleBot3 LDS-01 driver
+    # reports 0. Check what the real lidar reports (ros2 topic echo /scan,
+    # pointing it at open space) and set this true if it is 0.
+    lidar_short_is_no_return: false

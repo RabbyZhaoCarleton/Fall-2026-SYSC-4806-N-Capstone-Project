@@ -6,7 +6,8 @@
     Blue    intent: what the robot is told or plans (commands, path, goal)
     Black   reality: what the robot measured or did (odometry, pose, trail)
     Gray    no data, stale data, or unknown map area
-    Purple  exploration frontiers
+    Purple  exploration frontiers (green ring: maze exit, dashed: probable exit;
+            gray: postponed, amber: abandoned)
 """
 
 from python_qt_binding.QtGui import QColor, QFont, QFontDatabase, QPalette
@@ -23,6 +24,9 @@ PURPLE = QColor('#6a1b9a')
 WHITE = QColor('#ffffff')
 
 SEVERITY = {'info': GRAY, 'warning': AMBER, 'error': RED}
+# frontier states from explore_lite
+FRONTIER = {'open': PURPLE, 'candidate': GREEN, 'exit': GREEN, 'postponed': GRAY,
+            'abandoned': AMBER}
 LEVEL = {'ok': GREEN, 'warning': AMBER, 'error': RED}
 
 

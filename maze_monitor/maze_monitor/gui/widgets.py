@@ -474,10 +474,27 @@ class MapView(QWidget):
             p.drawLine(QPointF(g.x() - 6, g.y() - 6), QPointF(g.x() + 6, g.y() + 6))
             p.drawLine(QPointF(g.x() - 6, g.y() + 6), QPointF(g.x() + 6, g.y() - 6))
         if self.frontiers:
-            p.setPen(Qt.NoPen)
-            p.setBrush(style.PURPLE)
-            for x, y in self.frontiers:
-                p.drawEllipse(self.to_screen(x, y), 4, 4)
+            # (x, y, kind, xs, ys): cells in the state's colour, then a mark at
+            # the centre; maze exits get a labelled green ring
+            for _, _, kind, xs, ys in self.frontiers:
+                if xs:
+                    p.setPen(pen(style.alpha(style.FRONTIER[kind], 140), 3))
+                    p.drawPoints(poly(xs, ys))
+            fm = QFontMetrics(self.font())
+            for x, y, kind, _, _ in self.frontiers:
+                s = self.to_screen(x, y)
+                color = style.FRONTIER[kind]
+                if kind in ('exit', 'candidate'):
+                    p.setBrush(Qt.NoBrush)
+                    p.setPen(pen(color, 2.5, Qt.SolidLine if kind == 'exit' else Qt.DashLine))
+                    p.drawEllipse(s, 9, 9)
+                    p.setPen(pen(color))
+                    p.drawText(QPointF(s.x() + 11, s.y() + fm.ascent() / 2 - 1),
+                               'exit' if kind == 'exit' else 'exit?')
+                else:
+                    p.setPen(Qt.NoPen)
+                    p.setBrush(color)
+                    p.drawEllipse(s, 4, 4)
         for e, active in self.events:
             if e.x is None:
                 continue

@@ -13,7 +13,7 @@ from .widgets import (Card, HeadingDial, KeyValueGrid, MapView, SpeedBars, Statu
                       SurroundingsView, TimePlot, clearance_color)
 from ..analysis.diagnosis import activity, diagnose
 from ..analysis.geometry import Pose2D, direction_name, wrap
-from ..analysis.interpreters import HealthInterpreter
+from ..analysis.interpreters import STATE_KINDS, HealthInterpreter, frontier_kind
 
 NAV_STATUS = '/navigate_to_pose/_action/status'
 NAV_FEEDBACK = '/navigate_to_pose/_action/feedback'
@@ -58,7 +58,8 @@ class AnalysisView(QWidget):
 
         # Left column: map and plots.
         left = QSplitter(Qt.Vertical)
-        self.map_card = Card('Map', ('/map', '/odom', '/tf', '/plan', '/explore/frontiers', '/scan'))
+        self.map_card = Card('Map', ('/map', '/odom', '/tf', '/plan', '/explore/frontiers',
+                                     '/explore/frontier_states', '/scan'))
         bar = QHBoxLayout()
         self.follow_box = QCheckBox('Follow')
         self.follow_box.setToolTip('Keep the robot in the center of the map')
@@ -81,12 +82,14 @@ class AnalysisView(QWidget):
         self.map = self.map_card.add(MapView(), 1)
         fit.clicked.connect(self.map.fit)
         self.map.seek_requested.connect(self.seek_requested)
-        legend = QLabel('Black: robot · Blue: plan, goal · Purple: frontiers · Dots: events')
+        legend = QLabel('Black: robot · Blue: plan, goal · Purple: frontiers · Green ring: exit · Dots: events')
         legend.setStyleSheet(f'color: {style.GRAY.name()};')
         legend.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         legend.setToolTip('Black: the robot (circle and heading line) and its trail.\n'
                           'Blue: the planned path and the goal (X).\n'
-                          'Purple: exploration frontiers.\n'
+                          'Purple: exploration frontiers (gray: postponed, amber: abandoned).\n'
+                          'Green ring: a maze exit; dashed with "exit?": a probable exit the lidar '
+                          'saw no return through, not yet confirmed.\n'
                           'Amber and red dots: warnings and errors where they happened; '
                           'a ring marks events active at the cursor. Click a dot to jump to it.\n'
                           'Gray points: the lidar scan at the cursor.\n'
@@ -154,7 +157,8 @@ class AnalysisView(QWidget):
         self.nav_kv = self.nav_card.add(KeyValueGrid(1))
         rl.addWidget(self.nav_card)
 
-        self.exp_card = Card('Exploration', ('/map', '/explore/frontiers', '/explore/status'))
+        self.exp_card = Card('Exploration', ('/map', '/explore/frontiers', '/explore/frontier_states',
+                                             '/explore/exits', '/explore/status'))
         self.exp_kv = self.exp_card.add(KeyValueGrid(1))
         rl.addWidget(self.exp_card)
 
@@ -359,7 +363,9 @@ class AnalysisView(QWidget):
                 ('Postponed', f'{int(g("explore.postponed", 0))}'),
                 ('Abandoned', f'{int(g("explore.blacklisted", 0))}',
                  style.AMBER if g('explore.blacklisted', 0) else None),
-                ('Exits found', f'{int(g("explore.exits", 0))}'),
+                ('Exit candidates', f'{int(g("explore.exit_candidates", 0))}'),
+                ('Exits found', f'{int(g("explore.exits", 0))}'
+                 + (f'  {g("explore.exit_list")}' if g('explore.exit_list') not in (None, '—') else '')),
                 ('Map size', f'{g("map.width", 0):.1f} × {g("map.height", 0):.1f} m'
                  if g('map.width') is not None else '—'),
             ])
@@ -436,13 +442,7 @@ class AnalysisView(QWidget):
             _, msg = ptr.latest(t)
             if msg is not None and msg.poses:
                 plan = ([p.pose.position.x for p in msg.poses], [p.pose.position.y for p in msg.poses])
-        frontiers = []
-        ftr = tl.tracks.get('/explore/frontiers')
-        if ftr is not None and visible('/explore/frontiers'):
-            _, msg = ftr.latest(t)
-            if msg is not None:
-                frontiers = [(m.pose.position.x, m.pose.position.y) for m in msg.markers
-                             if m.action == 0 and m.type == 2]
+        frontiers = self._frontiers(tl, t, visible)
         floor = 0 if self.all_events_box.isChecked() else 1
         sev_rank = {'info': 0, 'warning': 1, 'error': 2}
         events = [(e, e.active_at(t)) for e in tl.events
@@ -467,6 +467,42 @@ class AnalysisView(QWidget):
             pose, trail = None, None
         self.map.set_overlays(pose, trail, plan, goal if visible('/plan') else None,
                               frontiers, events, scan_pts, self.config.robot_radius)
+
+    @staticmethod
+    def _frontiers(tl, t, visible):
+        """Frontiers at t as (x, y, kind, xs, ys), from explore_lite's frontier states,
+        or from its marker colours in runs recorded before it published them."""
+        out = []
+        str_ = tl.tracks.get('/explore/frontier_states')
+        if str_ is not None:
+            if not visible('/explore/frontier_states'):
+                return out
+            _, msg = str_.latest(t)
+            if msg is not None:
+                out = [(f.centroid.x, f.centroid.y, STATE_KINDS.get(f.state, 'open'),
+                        [p.x for p in f.points], [p.y for p in f.points]) for f in msg.frontiers]
+            # exits found earlier that are no longer frontiers
+            etr = tl.tracks.get('/explore/exits')
+            if etr is not None:
+                _, exits = etr.latest(t)
+                for f in exits.frontiers if exits is not None else ():
+                    if not any(k == 'exit' and math.hypot(x - f.centroid.x, y - f.centroid.y) < 0.3
+                               for x, y, k, _, _ in out):
+                        out.append((f.centroid.x, f.centroid.y, 'exit', [], []))
+            return out
+        ftr = tl.tracks.get('/explore/frontiers')
+        if ftr is not None and visible('/explore/frontiers'):
+            _, msg = ftr.latest(t)
+            if msg is not None:
+                cells = {m.id: m for m in msg.markers if m.action == 0 and m.type == 8}
+                for m in msg.markers:
+                    if m.action == 0 and m.type == 2:
+                        c = cells.get(m.id - 1)
+                        kind = (frontier_kind(c.color) or 'open') if c is not None else 'open'
+                        xs = [p.x for p in c.points] if c is not None else []
+                        ys = [p.y for p in c.points] if c is not None else []
+                        out.append((m.pose.position.x, m.pose.position.y, kind, xs, ys))
+        return out
 
     def _update_plots(self, tl, t, units):
         numeric = sorted(((k, s) for k, s in tl.series.items() if s.numeric and k != 'nav.goal_start'),

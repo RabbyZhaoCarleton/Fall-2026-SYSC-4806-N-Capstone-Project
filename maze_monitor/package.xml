@@ -24,6 +24,7 @@
   <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>rosgraph_msgs</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>explore_lite_msgs</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
 

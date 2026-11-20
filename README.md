@@ -145,6 +145,14 @@ ros2 topic pub --once /explore/resume std_msgs/msg/Bool "{data: false}"
 ros2 topic pub --once /explore/resume std_msgs/msg/Bool "{data: true}"
 ```
 
+**List the maze exits found so far** (explore_lite stops sending the robot to a frontier once the lidar shows it opens to the outside):
+
+```bash
+ros2 topic echo --once --qos-durability transient_local /explore/exits
+```
+
+Every frontier with its state (open, probable exit, exit, postponed, abandoned) is on `/explore/frontier_states`.
+
 **Change the maze:** edit the ASCII drawing in `maze_sim/scripts/make_maze.py` and run it. It writes `maze_sim/worlds/maze.sdf`. Rebuild after adding a new world file.
 
 ## Debugging with the maze monitor
