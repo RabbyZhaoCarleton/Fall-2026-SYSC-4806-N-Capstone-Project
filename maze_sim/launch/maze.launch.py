@@ -1,11 +1,13 @@
+import json
 import os
+import re
 import subprocess
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (AppendEnvironmentVariable, DeclareLaunchArgument,
                             IncludeLaunchDescription, LogInfo, OpaqueFunction,
-                            TimerAction)
+                            Shutdown, TimerAction)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -33,6 +35,7 @@ def start_gazebo_server(context):
     ros_gz_sim = get_package_share_directory('ros_gz_sim')
     return [
         LogInfo(msg=f'Loading world: {world_path}'),
+        ground_truth_bridge(world_path),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(ros_gz_sim, 'launch', 'gz_sim.launch.py')
@@ -45,8 +48,40 @@ def start_gazebo_server(context):
     ]
 
 
+def ground_truth_bridge(world_path):
+    """Bridge the simulator's true poses to /ground_truth/poses (geometry_msgs/PoseArray).
+
+    Gazebo publishes the pose of every moving entity on
+    /world/<world>/dynamic_pose/info, ordered by entity: the robot model first
+    (its base_footprint in world coordinates), then its links relative to the
+    model. PoseArray keeps the sim-time stamp; the entity names are lost in any
+    ROS message type, so readers take poses[0] as the robot (one robot only).
+    Odometry, the EKF and SLAM never see this topic. It is recorded so drift can
+    be measured against the truth (tools/drift_report.py).
+    """
+    with open(world_path) as f:
+        match = re.search(r'<world\s+name\s*=\s*"([^"]+)"', f.read())
+    if not match:
+        raise RuntimeError(f'No <world name="..."> in {world_path}')
+    gz_topic = f'/world/{match.group(1)}/dynamic_pose/info'
+    return Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        name='ground_truth_bridge',
+        arguments=[f'{gz_topic}@geometry_msgs/msg/PoseArray[gz.msgs.Pose_V'],
+        remappings=[(gz_topic, '/ground_truth/poses')],
+        output='screen',
+    )
+
+
 def is_true(value):
     return value.strip().lower() in ('true', '1', 'yes')
+
+
+# Seconds after launch. Nav2 takes about 7 s to activate, so explore_lite starts
+# well after it is ready.
+NAV2_START_DELAY = 5.0
+EXPLORE_START_DELAY = 20.0
 
 
 def start_nav_and_explore(context):
@@ -64,8 +99,13 @@ def start_nav_and_explore(context):
         if not os.path.isfile(nav_params):
             raise RuntimeError(f'Nav2 params file not found: {nav_params}')
         nav2_bringup = get_package_share_directory('nav2_bringup')
-        actions.append(LogInfo(msg=f'Starting Nav2 with: {nav_params}'))
-        actions.append(IncludeLaunchDescription(
+        actions.append(LogInfo(
+            msg=f'Starting Nav2 in {NAV2_START_DELAY:g} s with: {nav_params}'))
+        # Start Nav2 after Gazebo and SLAM instead of all at once. When ~20 processes
+        # start together, a lifecycle reply from a Nav2 server can be lost while the
+        # nodes are still discovering each other; the lifecycle manager then waits
+        # forever and Nav2 never activates ("Waiting to connect to move_base nav2 server").
+        actions.append(TimerAction(period=NAV2_START_DELAY, actions=[IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(nav2_bringup, 'launch', 'navigation_launch.py')
             ),
@@ -74,21 +114,124 @@ def start_nav_and_explore(context):
                 'params_file': nav_params,
                 'autostart': 'true',
             }.items(),
-        ))
+        )]))
 
     if explore:
+        # explore_lite exits once the robot is back at its start (or could not get
+        # there). With shutdown_when_done, everything else stops then too, which
+        # also closes the run's recording.
+        on_exit = None
+        if is_true(LaunchConfiguration('shutdown_when_done').perform(context)):
+            on_exit = [Shutdown(reason='explore_lite has ended navigation')]
         if not os.path.isfile(explore_params):
             raise RuntimeError(f'Explore params file not found: {explore_params}')
-        actions.append(LogInfo(msg=f'Starting explore_lite with: {explore_params}'))
+        actions.append(LogInfo(
+            msg=f'Starting explore_lite in {EXPLORE_START_DELAY:g} s with: {explore_params}'))
         # Give Gazebo, SLAM and Nav2 time to come up before exploring.
-        actions.append(TimerAction(period=15.0, actions=[Node(
+        actions.append(TimerAction(period=EXPLORE_START_DELAY, actions=[Node(
             package='explore_lite',
             executable='explore',
             name='explore_node',
             output='screen',
             parameters=[explore_params, {'use_sim_time': is_true(use_sim_time)}],
+            on_exit=on_exit,
         )]))
     return actions
+
+
+def spawn_robot(context):
+    """Spawn the TurtleBot3 and bridge its topics; with ekf:=true, also start the EKF.
+
+    Without the EKF this is turtlebot3_gazebo's own spawn launch, where Gazebo's
+    wheel odometry publishes odom -> base_footprint. With the EKF, that transform
+    is left out of the bridge and robot_localization publishes it instead.
+    """
+    tb3_gazebo = get_package_share_directory('turtlebot3_gazebo')
+    x_pose = LaunchConfiguration('x_pose').perform(context)
+    y_pose = LaunchConfiguration('y_pose').perform(context)
+    if not is_true(LaunchConfiguration('ekf').perform(context)):
+        return [IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(tb3_gazebo, 'launch', 'spawn_turtlebot3.launch.py')),
+            launch_arguments={'x_pose': x_pose, 'y_pose': y_pose}.items(),
+        )]
+
+    model = os.environ.get('TURTLEBOT3_MODEL', 'burger')
+    if model != 'burger':
+        raise RuntimeError(
+            f'ekf:=true has a bridge config for the burger only (TURTLEBOT3_MODEL={model}). '
+            'Use ekf:=false or add a bridge config for this model.')
+    ekf_params = os.path.abspath(os.path.expanduser(
+        LaunchConfiguration('ekf_params').perform(context)))
+    if not os.path.isfile(ekf_params):
+        raise RuntimeError(f'EKF params file not found: {ekf_params}')
+    use_sim_time = is_true(LaunchConfiguration('use_sim_time').perform(context))
+    maze_sim = get_package_share_directory('maze_sim')
+
+    return [
+        Node(
+            package='ros_gz_sim',
+            executable='create',
+            arguments=['-name', model,
+                       '-file', os.path.join(tb3_gazebo, 'models', 'turtlebot3_' + model,
+                                             'model.sdf'),
+                       '-x', x_pose, '-y', y_pose, '-z', '0.01'],
+            output='screen',
+        ),
+        Node(
+            package='ros_gz_bridge',
+            executable='parameter_bridge',
+            arguments=['--ros-args', '-p', 'config_file:=' + os.path.join(
+                maze_sim, 'config', 'turtlebot3_burger_bridge.yaml')],
+            output='screen',
+        ),
+        # Gazebo stamps IMU messages with its own frame name (model/link/sensor),
+        # which is not in the robot's TF tree. Tie it to imu_link so the EKF can
+        # use the IMU.
+        Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            arguments=['--frame-id', 'imu_link',
+                       '--child-frame-id', f'{model}/imu_link/tb3_imu'],
+            parameters=[{'use_sim_time': use_sim_time}],
+            output='screen',
+        ),
+        Node(
+            package='robot_localization',
+            executable='ekf_node',
+            name='ekf_filter_node',
+            parameters=[ekf_params, {'use_sim_time': use_sim_time}],
+            output='screen',
+        ),
+    ]
+
+
+MONITORED_ARGS = ('world', 'x_pose', 'y_pose', 'use_sim_time', 'slam', 'rviz', 'gui', 'nav',
+                  'explore', 'shutdown_when_done', 'ekf', 'slam_params', 'nav_params',
+                  'explore_params', 'ekf_params')
+
+
+def start_monitor(context):
+    """Start the maze_monitor GUI, labelled with the launch mode, if monitor is true."""
+    if not is_true(LaunchConfiguration('monitor').perform(context)):
+        return []
+    values = {name: LaunchConfiguration(name).perform(context) for name in MONITORED_ARGS}
+    if is_true(values['explore']):
+        label = 'explore'
+    elif is_true(values['nav']):
+        label = 'nav'
+    else:
+        label = 'manual'
+    arguments = ['--label', label, '--launch-args', json.dumps(values)]
+    if not is_true(LaunchConfiguration('monitor_record').perform(context)):
+        arguments.append('--no-record')
+    return [Node(
+        package='maze_monitor',
+        executable='maze_monitor',
+        name='maze_monitor',
+        output='screen',
+        arguments=arguments,
+    )]
 
 
 def generate_launch_description():
@@ -100,8 +243,6 @@ def generate_launch_description():
     maze_navigation = get_package_share_directory('maze_navigation')
 
     use_sim_time = LaunchConfiguration('use_sim_time')
-    x_pose = LaunchConfiguration('x_pose')
-    y_pose = LaunchConfiguration('y_pose')
     slam = LaunchConfiguration('slam')
     rviz = LaunchConfiguration('rviz')
     rviz_config = LaunchConfiguration('rviz_config')
@@ -123,6 +264,18 @@ def generate_launch_description():
             'slam', default_value='true',
             description='Start slam_toolbox'),
         DeclareLaunchArgument(
+            'slam_params',
+            default_value=os.path.join(maze_navigation, 'config', 'slam_maze.yaml'),
+            description='slam_toolbox parameters file'),
+        DeclareLaunchArgument(
+            'ekf', default_value='true',
+            description='Get odom -> base_footprint from an EKF that combines wheel '
+                        'odometry with the IMU gyro, instead of wheel odometry alone'),
+        DeclareLaunchArgument(
+            'ekf_params',
+            default_value=os.path.join(maze_navigation, 'config', 'ekf_maze.yaml'),
+            description='robot_localization EKF parameters file'),
+        DeclareLaunchArgument(
             'rviz', default_value='true',
             description='Start RViz 2'),
         DeclareLaunchArgument(
@@ -138,6 +291,11 @@ def generate_launch_description():
             'explore', default_value='false',
             description='Start Nav2 and explore_lite for autonomous mapping'),
         DeclareLaunchArgument(
+            'shutdown_when_done', default_value='false',
+            description='Stop everything (Gazebo, SLAM, Nav2, the recording) once '
+                        'explore_lite ends navigation, or if it exits for any '
+                        'other reason. Off: the rest keeps running to look at the map'),
+        DeclareLaunchArgument(
             'nav_params',
             default_value=os.path.join(maze_navigation, 'config', 'nav2_maze.yaml'),
             description='Nav2 parameters file'),
@@ -145,6 +303,12 @@ def generate_launch_description():
             'explore_params',
             default_value=os.path.join(maze_navigation, 'config', 'explore_maze.yaml'),
             description='explore_lite parameters file'),
+        DeclareLaunchArgument(
+            'monitor', default_value='true',
+            description='Open the maze monitor (live view, run recording, and replay)'),
+        DeclareLaunchArgument(
+            'monitor_record', default_value='true',
+            description='Save the run to ~/maze_runs (only with monitor:=true)'),
     ]
 
     # The Gazebo window is optional. If it crashes or is closed, the simulation,
@@ -164,13 +328,6 @@ def generate_launch_description():
         launch_arguments={'use_sim_time': use_sim_time}.items(),
     )
 
-    spawn_turtlebot_cmd = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(launch_file_dir, 'spawn_turtlebot3.launch.py')
-        ),
-        launch_arguments={'x_pose': x_pose, 'y_pose': y_pose}.items(),
-    )
-
     set_env_vars_resources = AppendEnvironmentVariable(
         'GZ_SIM_RESOURCE_PATH', os.path.join(tb3_gazebo, 'models'))
 
@@ -178,7 +335,10 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(slam_toolbox, 'launch', 'online_async_launch.py')
         ),
-        launch_arguments={'use_sim_time': use_sim_time}.items(),
+        launch_arguments={
+            'use_sim_time': use_sim_time,
+            'slam_params_file': LaunchConfiguration('slam_params'),
+        }.items(),
         condition=IfCondition(slam),
     )
 
@@ -204,8 +364,9 @@ def generate_launch_description():
     ld.add_action(OpaqueFunction(function=start_gazebo_server))
     ld.add_action(gzclient_cmd)
     ld.add_action(robot_state_publisher_cmd)
-    ld.add_action(spawn_turtlebot_cmd)
+    ld.add_action(OpaqueFunction(function=spawn_robot))
     ld.add_action(slam_cmd)
     ld.add_action(rviz_cmd)
     ld.add_action(OpaqueFunction(function=start_nav_and_explore))
+    ld.add_action(OpaqueFunction(function=start_monitor))
     return ld

@@ -1,0 +1,73 @@
+# Default settings for maze_monitor.
+#
+# Copy this file, change what you need, and start the monitor with
+#   ros2 run maze_monitor maze_monitor --config my_monitor.yaml
+# Settings that you leave out keep their defaults.
+
+# Folder that holds one subfolder per recorded run. "~" is your home folder.
+runs_dir: ~/maze_runs
+
+record:
+  # Topics that are never recorded or shown (regular expressions, full match).
+  exclude:
+    - /parameter_events
+    - /rosout_agg
+    - .*/bond
+    - .*/transition_event
+    - .*image.*
+    - .*/camera/.*
+    - .*points.*
+    - .*costmap_raw.*
+    - .*costmap_updates
+    - .*_action/cancel_goal.*
+    - /evaluation             # DWB critic scores, about 1 MB per message
+    - /marker                 # DWB trajectory markers, about 1 MB per message
+    - .*/voxel_grid
+    - .*costmap/.*_layer.*    # individual costmap layers; the combined costmap is kept
+  # Maximum recording rate per topic, in messages per second.
+  max_rate_hz:
+    /clock: 10.0
+    /joint_states: 10.0
+    /imu: 100.0
+    /ground_truth/poses: 20.0   # simulator's true robot pose, for measuring drift
+  # Topics whose messages are larger than this (in KB) are recorded at most
+  # large_message_max_hz times per second, so that unknown debug topics can't
+  # fill the disk.
+  large_message_kb: 256
+  large_message_max_hz: 0.5
+
+robot:
+  # Distance from the robot center to its outer edge, in metres.
+  # TurtleBot3 Burger: about 0.105.
+  radius: 0.105
+
+thresholds:
+  near_wall_clearance: 0.05      # m, clearance below which the robot is "close to a wall"
+  contact_clearance: 0.015       # m, clearance below which the robot touches a wall
+  blocked_min_cmd: 0.05          # m/s, smallest command the blocked detector considers
+  blocked_ratio: 0.3             # actual / commanded speed below which the robot is "blocked"
+  blocked_time: 1.0              # s, how long the robot must be blocked before reporting
+  slip_time: 1.5                 # s, how long odometry and lidar must disagree
+  stuck_window: 10.0             # s
+  stuck_distance: 0.10           # m, movement within stuck_window below which the robot is "stuck"
+  spin_angle_deg: 360.0          # deg of turning ...
+  spin_window: 15.0              # s ... within this time ...
+  spin_distance: 0.15            # m ... while moving less than this counts as spinning
+  oscillation_flips: 6           # turn-direction changes ...
+  oscillation_window: 5.0        # s ... within this time counts as oscillation
+  localization_jump_m: 0.10      # m, sudden map->odom change
+  localization_jump_deg: 5.0     # deg, sudden map->odom change
+  impact_accel: 6.0              # m/s^2, horizontal IMU acceleration that counts as a bump
+  silent_periods: 5.0            # missing periods before a topic counts as silent
+  slow_rtf: 0.5                  # real-time factor below which the simulation counts as slow
+  exploration_stall: 60.0        # s without map growth while exploring
+
+# Topics hidden when the monitor starts. You can show them in the Topics panel.
+hidden_topics:
+  - /clock
+  - /joint_states
+  - /robot_description
+  - /tf_static
+  - .*/published_footprint
+  - .*/footprint
+  - .*/transition_event

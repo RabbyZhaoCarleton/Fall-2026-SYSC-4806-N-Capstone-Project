@@ -26,6 +26,18 @@ jobs:
           apt-get install -y python3-vcstool
           cd src && vcs import --input capstone/capstone.repos .
 
+      # Same as setup.sh: our explore_lite changes (frontier commitment, exit
+      # detection, ...) live in patches/<repo>/*.patch, not in the upstream repo.
+      - name: Apply patches to third-party repositories
+        run: |
+          cd src
+          for patch in capstone/patches/*/*.patch; do
+            [ -e "$patch" ] || continue
+            target="$(basename "$(dirname "$patch")")"
+            echo "$target: applying $(basename "$patch")"
+            git -C "$target" apply "$PWD/$patch"
+          done
+
       - name: Install dependencies
         run: |
           rosdep update --rosdistro jazzy
@@ -40,3 +52,8 @@ jobs:
         run: |
           source install/setup.bash
           ros2 launch maze_sim maze.launch.py --show-args > /dev/null
+
+      - name: Test the maze monitor
+        run: |
+          source install/setup.bash
+          python3 -m pytest -q src/capstone/maze_monitor/test
