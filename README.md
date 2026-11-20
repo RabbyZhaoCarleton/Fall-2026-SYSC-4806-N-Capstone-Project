@@ -1,177 +1,92 @@
 # Fall-2026-SYSC-4806-N-Capstone-Project
 
-An autonomous robot that maps an unknown grid maze with a 2D lidar (SLAM), plans a time-optimal sequence for delivering objects to the right exits, and carries it out with a 6-DOF arm. This repository holds the ROS 2 Jazzy packages for both the Gazebo simulation and the real robot (Raspberry Pi 5).
+An autonomous robot that maps an unknown grid maze with a 2D lidar (SLAM), plans how to deliver objects to the right exits, and does it with a 6-DOF arm. ROS 2 Jazzy packages for the Gazebo simulation and the real robot (Raspberry Pi 5).
 
-| Package | Purpose | Simulation (PC) | Raspberry Pi 5 |
-|---|---|---|---|
-| `maze_description` | Robot model (URDF/xacro) | yes | yes |
-| `maze_navigation` | slam_toolbox, Nav2 and explore_lite configuration | yes | yes |
-| `maze_bringup` | Hardware drivers and robot launch files | no | yes |
-| `maze_sim` | Gazebo worlds, maze generator, simulation launch files | yes | no |
+| Package | Purpose |
+|---|---|
+| `maze_description` | Robot model (URDF/xacro) |
+| `maze_navigation` | slam_toolbox, Nav2 and explore_lite configuration |
+| `maze_bringup` | Hardware drivers and launch files for the real robot |
+| `maze_sim` | Gazebo worlds, maze generator, simulation launch files |
 
-Third-party source packages (TurtleBot3 simulation, m-explore-ros2) are pinned in `capstone.repos` and fetched by `setup.sh`.
+## Setup
 
-## Getting started on Windows
-
-Everything runs inside WSL (Windows Subsystem for Linux) with Ubuntu 24.04. Expect about 30 to 60 minutes the first time, mostly downloads.
-
-### 1. Install Ubuntu 24.04 in WSL
-
-Open **PowerShell as administrator** and run:
+Windows users work inside WSL with Ubuntu 24.04. In **PowerShell as administrator**:
 
 ```powershell
 wsl --install -d Ubuntu-24.04
 ```
 
-Restart if asked. When Ubuntu opens for the first time, choose a username and password. The password is what `sudo` asks for later.
-
-If you already have WSL, check that you have Ubuntu 24.04 with `wsl -l -v`.
-
-### 2. Sign in to GitHub inside Ubuntu
-
-The repository is private, so Ubuntu needs your GitHub login. In the **Ubuntu** terminal, install the GitHub CLI and tell it how to open your Windows browser. Linux in WSL has no browser of its own, so without the second line the login can't open the GitHub page and fails.
+Then, in the **Ubuntu** terminal, sign in to GitHub (the repository is private):
 
 ```bash
 sudo apt update && sudo apt install -y gh git
 gh config set browser "/mnt/c/Windows/System32/rundll32.exe url.dll,FileProtocolHandler"
-gh auth login
-```
-
-Choose GitHub.com, HTTPS, Yes (authenticate Git), and "Login with a web browser". Copy the one-time code it shows, then press Enter. GitHub opens in your Windows browser; paste the code there and approve. Back in the terminal, wait for "Authentication complete". Then let git use that login:
-
-```bash
+gh auth login        # GitHub.com, HTTPS, authenticate Git: yes, web browser
 gh auth setup-git
-git config --global user.name "Your Name"
-git config --global user.email "your-email@cmail.carleton.ca"
 ```
 
-### 3. Clone the repository into a workspace
-
-The repository must be cloned to exactly this location, inside the Linux file system (not under `/mnt/c`):
+Clone to exactly this location (inside Linux, not under `/mnt/c`) and run the setup script:
 
 ```bash
 mkdir -p ~/ros2_ws/src && cd ~/ros2_ws/src
 gh repo clone RabbyZhaoCarleton/Fall-2026-SYSC-4806-N-Capstone-Project capstone
+cd capstone && ./setup.sh
 ```
 
-### 4. Run the setup script
+`setup.sh` installs ROS 2 Jazzy and all dependencies, fetches the pinned third-party packages, builds the workspace and updates `~/.bashrc`. Open a **new** terminal afterwards. On the Raspberry Pi use `./setup.sh --robot` (skips Gazebo and simulation packages).
+
+Edit the code with VS Code's **WSL** extension: `code ~/ros2_ws/src/capstone`.
+
+## Updating, switching branches and running
 
 ```bash
 cd ~/ros2_ws/src/capstone
-./setup.sh
+git pull                    # or: git switch <branch> && git pull
+./setup.sh                  # safe to rerun; picks up new dependencies and rebuilds
 ```
 
-It installs ROS 2 Jazzy and all dependencies, fetches the third-party packages, builds the workspace, picks your dedicated GPU for Gazebo and RViz, and adds the needed lines to `~/.bashrc`. It asks for your Ubuntu password when it needs to install something.
-
-### 5. Run the simulation
-
-Open a **new** Ubuntu terminal, then:
-
-```bash
-ros2 launch maze_sim maze.launch.py explore:=true gui:=false
-```
-
-RViz opens and the robot starts exploring the maze on its own.
-
-## Editing the code
-
-Use VS Code with the **WSL** extension. From the Ubuntu terminal:
-
-```bash
-code ~/ros2_ws/src/capstone
-```
-
-This edits the files inside Linux directly. Don't edit them through `\\wsl$` from Windows programs or keep a second copy on the C: drive.
-
-## Day-to-day workflow
-
-```bash
-cd ~/ros2_ws/src/capstone
-git pull
-./setup.sh        # safe to rerun; picks up new dependencies and rebuilds
-```
-
-If you only changed code in existing packages, rebuilding is enough:
+If only code in existing packages changed, rebuilding is enough:
 
 ```bash
 cd ~/ros2_ws && colcon build --symlink-install
 ```
 
-Run `colcon build` from `~/ros2_ws`, never from inside `src`. After a package is added, open a new terminal (or run `source ~/ros2_ws/install/setup.bash`) so ROS can find it.
+Always build from `~/ros2_ws`, never from inside `src`, and open a new terminal after a package is added. If switching branches leaves errors like `package '...' not found`, do a clean build: `cd ~/ros2_ws && rm -rf build install log && colcon build --symlink-install`.
 
-Work on a branch and open a pull request instead of pushing to `main` directly:
+Then run the simulation:
 
 ```bash
-git switch -c feature/short-description
-# ...commit your changes...
-git push -u origin feature/short-description
-gh pr create
+ros2 launch maze_sim maze.launch.py explore:=true gui:=false
 ```
 
-GitHub builds every push and pull request automatically (the **build** check). Please make sure it passes before merging.
+Work on a branch and open a pull request rather than pushing to `main`; the **build** check must pass before merging.
 
 ## Using the simulation
 
 ```bash
-ros2 launch maze_sim maze.launch.py [arguments]
+ros2 launch maze_sim maze.launch.py [argument:=value ...]
 ```
 
 | Argument | Default | Meaning |
 |---|---|---|
-| `explore` | `false` | Start Nav2 and explore_lite for autonomous mapping |
-| `nav` | `false` | Start Nav2 only, to send goals yourself |
+| `explore` | `false` | Start Nav2 and explore_lite to map the maze autonomously |
+| `nav` | `false` | Start Nav2 only; send goals with **2D Goal Pose** in RViz |
 | `gui` | `true` | Open the Gazebo window (the simulation runs either way) |
 | `rviz` | `true` | Open RViz |
+| `slam` | `true` | Start slam_toolbox |
 | `world` | `maze_sim/worlds/maze.sdf` | World file to load |
-| `x_pose`, `y_pose` | `0.25`, `-0.25` | Robot start position in metres |
+| `x_pose`, `y_pose` | `0.25`, `-0.25` | Robot start position (m) |
 
-See all arguments with `ros2 launch maze_sim maze.launch.py --show-args`.
+`--show-args` lists every argument, including the parameter-file overrides.
 
-**Send a goal:** launch with `nav:=true`, then use **2D Goal Pose** in RViz (click, and drag to set the heading).
-
-**Save the map** while the simulation is still running, from a second terminal:
+Useful commands while it runs (from a second terminal):
 
 ```bash
-ros2 run nav2_map_server map_saver_cli -f ~/maze_map
+ros2 run nav2_map_server map_saver_cli -f ~/maze_map                       # save the map
+ros2 topic pub --once /explore/resume std_msgs/msg/Bool "{data: false}"     # pause exploring (true resumes)
 ```
 
-**Pause or resume exploration** without restarting:
+**Change the maze:** edit the ASCII drawing in `maze_sim/scripts/make_maze.py` and run it; it writes `maze_sim/worlds/maze.sdf`.
 
-```bash
-ros2 topic pub --once /explore/resume std_msgs/msg/Bool "{data: false}"
-ros2 topic pub --once /explore/resume std_msgs/msg/Bool "{data: true}"
-```
-
-**Change the maze:** edit the ASCII drawing in `maze_sim/scripts/make_maze.py` and run it. It writes `maze_sim/worlds/maze.sdf`. Rebuild after adding a new world file.
-
-## Troubleshooting
-
-**`gh auth login` fails** with "Failed opening a web browser" and then "Too many requests ... (slow_down)": the GitHub CLI couldn't open a browser, and GitHub then blocked the login for a few minutes. Run the `gh config set browser ...` line from step 2, wait about 5 minutes, and run `gh auth login` again. If the terminal still shows an error after you approved in the browser, run `gh auth status`; the login often went through anyway.
-
-**"Could not get lock /var/lib/dpkg/lock-frontend ... held by process ... (unattended-upgr)"**: Ubuntu is installing its automatic updates in the background, which it often does right after a new install. `setup.sh` now waits for this by itself; if you see the error from another command, wait until `pgrep -af /usr/bin/unattended-upgrade` prints nothing, then run the command again. Don't delete the lock files or kill the update.
-
-**`package '...' not found`**: the terminal was opened before the package was built. Open a new terminal, or run `source ~/ros2_ws/install/setup.bash`.
-
-**"A Gazebo server is already running"**, the wrong world appears, or the robot stutters: an earlier simulation is still running in the background. Stop it with `gzkill`, then launch again.
-
-**Gazebo and RViz are slow**: check which GPU they use. `llvmpipe` means the CPU is drawing everything.
-
-```bash
-python3 ~/ros2_ws/src/capstone/tools/check_gpu.py
-```
-
-If it says `llvmpipe`, open a new terminal and check again. If it still does, rerun `./setup.sh`.
-
-**RViz shows everything but ignores clicks**: minimize RViz and restore it. If that doesn't help, close everything, run `wsl --shutdown` in Windows PowerShell, and open a new Ubuntu terminal.
-
-**The Gazebo window crashes**: the simulation keeps running without it. Use `gui:=false`; RViz shows everything needed.
-
-## Raspberry Pi 5 (real robot)
-
-On the Pi, running Ubuntu 24.04, clone the repository to the same place and run the script in robot mode. It skips Gazebo and the simulation packages:
-
-```bash
-mkdir -p ~/ros2_ws/src && cd ~/ros2_ws/src
-gh repo clone RabbyZhaoCarleton/Fall-2026-SYSC-4806-N-Capstone-Project capstone
-cd capstone && ./setup.sh --robot
-```
+**Common problems:** "A Gazebo server is already running" or the robot stutters → run `gzkill`. Gazebo/RViz slow → `python3 tools/check_gpu.py`; if it says `llvmpipe`, rerun `./setup.sh`. Gazebo window crashes → use `gui:=false`. RViz ignores clicks → minimize and restore it, or `wsl --shutdown` from PowerShell.
