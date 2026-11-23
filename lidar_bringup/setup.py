@@ -21,6 +21,7 @@ setup(
     entry_points={
         'console_scripts': [
             'scan_monitor = lidar_bringup.scan_monitor_node:main',
+            'attach_lidar = lidar_bringup.usb_attach:main',
             'load_generator = lidar_bringup.load_generator:main',
             'mock_hardware_demo = lidar_bringup.mock_hardware:main',
             'validate_pinout = lidar_bringup.pinout:main',

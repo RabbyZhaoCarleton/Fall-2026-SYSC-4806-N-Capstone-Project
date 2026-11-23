@@ -15,23 +15,61 @@ lidar_bringup/
     └── load_generator.py          CPU load to emulate SLAM/Nav2
 ```
 
-## 1. Prerequisites (Ubuntu 24.04 + ROS 2 Jazzy, same steps on PC and Pi 5)
+## 1. Build
+`setup.sh` (see the top-level README) fetches the Slamtec driver `sllidar_ros2` (pinned in
+`capstone.repos`) and builds this package, on the PC and on the Pi (`--robot`). After a `git pull`:
 ```bash
-sudo apt install ros-jazzy-desktop python3-colcon-common-extensions git   # Pi: ros-jazzy-ros-base
-mkdir -p ~/ws/src && cd ~/ws/src
-git clone https://github.com/Slamtec/sllidar_ros2.git      # vendor driver (build from source)
-cp -r /path/to/lidar_bringup .                              # this package
-cd ~/ws && rosdep install --from-paths src -y --ignore-src
-colcon build --symlink-install && source install/setup.bash
+cd ~/ros2_ws/src/capstone && ./setup.sh
 ```
-If the Slamtec repo's default branch does not build on Jazzy, check its Issues/branches; the
-node/param names used here (`sllidar_node`, `serial_port`, `serial_baudrate`, `frame_id`,
-`inverted`, `angle_compensate`, `scan_mode`) match its C1 launch file.
+To build only the LiDAR packages:
+```bash
+cd ~/ros2_ws && colcon build --symlink-install --packages-up-to lidar_bringup && source install/setup.bash
+```
+
+## 1b. WSL only: the USB device is attached automatically
+Windows owns USB devices; WSL only sees the LiDAR after it is passed through with
+[usbipd-win](https://github.com/dorssel/usbipd-win). **The launch file now does this for you**
+(`auto_attach:=true`, the default). Install usbipd once from PowerShell: `winget install usbipd`.
+
+On every launch (`lidar_bringup/usb_attach.py`):
+1. runs `usbipd.exe list` through WSL and finds the LiDAR by **USB ID `10c4:ea60`** (the CP210x
+   adapter), not by BUSID, so it works whichever port/hub/laptop it is plugged into;
+2. if the device is "Not shared" it runs `usbipd bind` once. That needs admin rights, so a
+   **Windows UAC prompt** appears the first time (disable with `auto_bind:=false`);
+3. runs `usbipd attach --wsl <this distro> --busid <found BUSID>` unless it is already attached;
+4. waits for `/dev/rplidar` (or the single `/dev/ttyUSB*`) and starts the driver on it.
+
+On the Raspberry Pi 5 steps 1-3 are skipped automatically; it only waits for the port.
+
+```bash
+ros2 run lidar_bringup attach_lidar --list   # what usbipd sees (BUSIDs, states)
+ros2 run lidar_bringup attach_lidar          # attach only; prints the port path
+ros2 launch lidar_bringup rplidar_c1.launch.py lidar_busid:=1-1    # force a BUSID
+```
+**ESP32 on the same machine:** its CP210x chip has the same USB ID. If two devices match, the
+code refuses to guess and lists them; choose with `lidar_busid:=<BUSID>` or
+`lidar_description:=<text>` (a substring of the description column).
+
+Troubleshooting:
+- *"usbipd.exe not found"*: install usbipd-win, then open a new WSL terminal.
+- *Attached but no serial port*: `dmesg | tail` should show `cp210x`; if not, run `wsl --update`
+  (the WSL kernel lacks the CP210x driver).
+- *"WSL failed to parse distributions"* (garbled text): the Windows variable `WSL_UTF8=1` is set.
+  The code overrides it for its own calls; for manual use run `$env:WSL_UTF8 = $null` in PowerShell.
+- *`/dev/rplidar` missing but `/dev/ttyUSB0` works*: udev isn't active in WSL. Enable systemd
+  (`[boot]\nsystemd=true` in `/etc/wsl.conf`, then `wsl --shutdown`) and run `install_udev.sh`.
+  Until then the code falls back to the lone ttyUSB device.
+- The LiDAR is attached to WSL while the launch runs; `usbipd detach --busid <BUSID>` (PowerShell)
+  gives it back to Windows.
+- Manual fallback (what the code automates): `usbipd list`, then
+  `usbipd bind --busid X` (admin, once) and `usbipd attach --wsl --busid X`.
+
+Unit tests (no hardware): `cd lidar_bringup && python3 -m unittest discover -s test -v`
 
 ## 2. Persistent device name
 ```bash
-./src/lidar_bringup/scripts/install_udev.sh        # add --remove-brltty if ttyUSB0 vanishes
-# log out/in (dialout group), replug the LiDAR
+~/ros2_ws/src/capstone/lidar_bringup/scripts/install_udev.sh   # add --remove-brltty if ttyUSB0 vanishes
+# replug the LiDAR (WSL: usbipd detach + attach) so the rule applies
 ls -l /dev/rplidar          # -> /dev/rplidar -> ttyUSB0
 ```
 **ESP32 clash:** the C1's adapter (CP210x, 10c4:ea60) is the same chip many ESP32 boards use.
@@ -49,11 +87,11 @@ ros2 launch lidar_bringup rplidar_c1.launch.py lidar_x:=0.08 lidar_z:=0.15   # r
 |---|---|---|
 | Topic exists | `ros2 topic list \| grep scan` | `/scan` listed |
 | Rate | `ros2 topic hz /scan --qos-reliability best_effort` | ~10 Hz |
-| Content | `ros2 topic echo /scan --once --qos-reliability best_effort` | `frame_id: laser_frame`, ~500 ranges, `range_max` about 12 |
+| Content | `ros2 topic echo /scan --once --qos-reliability best_effort` | `frame_id: laser_frame`, 720 ranges (angle_compensate), `range_min` 0.05, `range_max` 16 |
 | QoS | `ros2 topic info /scan -v` | publisher is BEST_EFFORT |
 | TF | `ros2 run tf2_ros tf2_echo base_link laser_frame` | transform printed |
 | RViz | `use_rviz:=true` | wall points appear; Fixed Frame `laser_frame`; scan topic reliability **Best Effort** |
-| Monitor | launch output / `ros2 run lidar_bringup scan_monitor` | `[scan_cb] ~10 Hz`, no "BELOW TARGET" |
+| Monitor | launch output / `ros2 run lidar_bringup scan_monitor` | `[scan_cb] ~10 Hz`, no "BELOW TARGET". One "No /scan messages received yet" warning at startup is normal (the motor is spinning up) |
 | Accuracy | tape-measure a flat wall at 0.3/1/3 m | within your 5 cm spec (proposal §4.2) |
 
 RViz showing nothing is almost always QoS (Reliable subscriber vs Best Effort publisher) or a wrong
@@ -109,6 +147,11 @@ python3 -m lidar_bringup.mock_hardware   # 50 Hz mock loop + type-guard demo
 - Use a short, good-quality data cable. Long or thin USB cables are a classic dropout cause.
 
 **Serial port management (Ubuntu 24.04)**
+- The launch file checks the serial port before starting the driver. If it is missing or not
+  readable/writable, it prints `Serial port problem: ...` with the fix (usbipd attach on WSL, udev
+  rule, permissions) and stops. Without this check the driver only says
+  `Error, unexpected error, code: 80008004` and the motor never spins (a bug in the Slamtec SDK hides
+  the failed port open).
 - **brltty** steals CP210x/CH340 adapters → `ttyUSB0` appears then vanishes. Remove it (`--remove-brltty`).
 - Add your user to `dialout` and re-login, or `/dev/rplidar` will be "permission denied" (rule also sets mode 0666).
 - Only one process may open the port. Close `minicom`/`screen`/a second driver instance first.
