@@ -26,45 +26,21 @@ To build only the LiDAR packages:
 cd ~/ros2_ws && colcon build --symlink-install --packages-up-to lidar_bringup && source install/setup.bash
 ```
 
-## 1b. WSL only: the USB device is attached automatically
+## 1b. WSL only: attach the USB device to Ubuntu
 Windows owns USB devices; WSL only sees the LiDAR after it is passed through with
-[usbipd-win](https://github.com/dorssel/usbipd-win). **The launch file now does this for you**
-(`auto_attach:=true`, the default). Install usbipd once from PowerShell: `winget install usbipd`.
-
-On every launch (`lidar_bringup/usb_attach.py`):
-1. runs `usbipd.exe list` through WSL and finds the LiDAR by **USB ID `10c4:ea60`** (the CP210x
-   adapter), not by BUSID, so it works whichever port/hub/laptop it is plugged into;
-2. if the device is "Not shared" it runs `usbipd bind` once. That needs admin rights, so a
-   **Windows UAC prompt** appears the first time (disable with `auto_bind:=false`);
-3. runs `usbipd attach --wsl <this distro> --busid <found BUSID>` unless it is already attached;
-4. waits for `/dev/rplidar` (or the single `/dev/ttyUSB*`) and starts the driver on it.
-
-On the Raspberry Pi 5 steps 1-3 are skipped automatically; it only waits for the port.
-
-```bash
-ros2 run lidar_bringup attach_lidar --list   # what usbipd sees (BUSIDs, states)
-ros2 run lidar_bringup attach_lidar          # attach only; prints the port path
-ros2 launch lidar_bringup rplidar_c1.launch.py lidar_busid:=1-1    # force a BUSID
+[usbipd-win](https://github.com/dorssel/usbipd-win). Install it once from PowerShell:
+`winget install usbipd`. Then, in **PowerShell**:
+```powershell
+usbipd list                          # find the "Silicon Labs CP210x" row, e.g. BUSID 2-4
+usbipd bind --busid 2-4              # once per device, needs an ADMIN PowerShell
+usbipd attach --wsl --busid 2-4      # every time the LiDAR is plugged in or WSL restarts
 ```
-**ESP32 on the same machine:** its CP210x chip has the same USB ID. If two devices match, the
-code refuses to guess and lists them; choose with `lidar_busid:=<BUSID>` or
-`lidar_description:=<text>` (a substring of the description column).
+While attached, the device disappears from Windows (no COM port) and appears in Ubuntu as
+`/dev/ttyUSB0`. `usbipd detach --busid 2-4` gives it back to Windows.
 
-Troubleshooting:
-- *"usbipd.exe not found"*: install usbipd-win, then open a new WSL terminal.
-- *Attached but no serial port*: `dmesg | tail` should show `cp210x`; if not, run `wsl --update`
-  (the WSL kernel lacks the CP210x driver).
-- *"WSL failed to parse distributions"* (garbled text): the Windows variable `WSL_UTF8=1` is set.
-  The code overrides it for its own calls; for manual use run `$env:WSL_UTF8 = $null` in PowerShell.
-- *`/dev/rplidar` missing but `/dev/ttyUSB0` works*: udev isn't active in WSL. Enable systemd
-  (`[boot]\nsystemd=true` in `/etc/wsl.conf`, then `wsl --shutdown`) and run `install_udev.sh`.
-  Until then the code falls back to the lone ttyUSB device.
-- The LiDAR is attached to WSL while the launch runs; `usbipd detach --busid <BUSID>` (PowerShell)
-  gives it back to Windows.
-- Manual fallback (what the code automates): `usbipd list`, then
-  `usbipd bind --busid X` (admin, once) and `usbipd attach --wsl --busid X`.
-
-Unit tests (no hardware): `cd lidar_bringup && python3 -m unittest discover -s test -v`
+If `usbipd attach` crashes with **"WSL failed to parse distributions"** followed by garbled
+characters, the Windows environment variable `WSL_UTF8=1` is set. Clear it for that window and
+retry: `$env:WSL_UTF8 = $null` (or remove it from the Windows user environment variables).
 
 ## 2. Persistent device name
 ```bash

@@ -3,7 +3,8 @@
 #
 # C1 facts (Slamtec datasheet): DTOF, ~5 kHz sampling, fixed ~10 Hz rotation,
 # ~12 m on white targets (shorter on dark/low-reflectivity surfaces), ~5 cm blind zone.
-# That is ~500 points/rev (~0.7 deg). Rotation speed is NOT user-adjustable on the C1.
+# That is ~500 raw points/rev; with angle_compensate the driver publishes 720 beams (0.5 deg).
+# The driver reports range_max 16 m in Standard mode. Rotation speed is NOT user-adjustable on the C1.
 /**:
   ros__parameters:
     # --- Connection -------------------------------------------------------

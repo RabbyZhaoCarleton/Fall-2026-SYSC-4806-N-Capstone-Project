@@ -34,9 +34,10 @@ jobs:
       - name: Build
         run: |
           source /opt/ros/jazzy/setup.bash
-          colcon build --packages-up-to maze_sim maze_description maze_navigation maze_bringup
+          colcon build --packages-up-to maze_sim maze_description maze_navigation maze_bringup lidar_bringup
 
       - name: Check that the simulation launch file loads
         run: |
           source install/setup.bash
           ros2 launch maze_sim maze.launch.py --show-args > /dev/null
+          ros2 launch lidar_bringup rplidar_c1.launch.py --show-args > /dev/null
