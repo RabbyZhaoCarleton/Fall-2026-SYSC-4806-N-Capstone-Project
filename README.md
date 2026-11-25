@@ -5,10 +5,9 @@ An autonomous robot that maps an unknown grid maze with a 2D lidar (SLAM), plans
 | Package | Purpose |
 |---|---|
 | `maze_description` | Robot model (URDF/xacro) |
-| `maze_navigation` | slam_toolbox, EKF, Nav2 and explore_lite configuration |
+| `maze_navigation` | slam_toolbox, Nav2 and explore_lite configuration |
 | `maze_bringup` | Hardware drivers and launch files for the real robot |
 | `maze_sim` | Gazebo worlds, maze generator, simulation launch files |
-| `maze_monitor` | Debugging monitor: live analysis, run recording and replay (PC only) |
 
 ## Setup
 
@@ -76,9 +75,6 @@ ros2 launch maze_sim maze.launch.py [argument:=value ...]
 | `gui` | `true` | Open the Gazebo window (the simulation runs either way) |
 | `rviz` | `true` | Open RViz |
 | `slam` | `true` | Start slam_toolbox |
-| `ekf` | `true` | Fuse wheel odometry and IMU with an EKF |
-| `monitor` | `true` | Open the maze monitor |
-| `monitor_record` | `true` | Save each run to `~/maze_runs` |
 | `world` | `maze_sim/worlds/maze.sdf` | World file to load |
 | `x_pose`, `y_pose` | `0.25`, `-0.25` | Robot start position (m) |
 
@@ -89,11 +85,8 @@ Useful commands while it runs (from a second terminal):
 ```bash
 ros2 run nav2_map_server map_saver_cli -f ~/maze_map                       # save the map
 ros2 topic pub --once /explore/resume std_msgs/msg/Bool "{data: false}"     # pause exploring (true resumes)
-ros2 run maze_monitor maze_monitor --no-ros --replay latest                 # replay the last run
 ```
 
 **Change the maze:** edit the ASCII drawing in `maze_sim/scripts/make_maze.py` and run it; it writes `maze_sim/worlds/maze.sdf`.
-
-The monitor explains what the robot is doing and flags collisions, getting stuck, failed plans and localization jumps. See its [user manual](maze_monitor/docs/user-manual.md).
 
 **Common problems:** "A Gazebo server is already running" or the robot stutters → run `gzkill`. Gazebo/RViz slow → `python3 tools/check_gpu.py`; if it says `llvmpipe`, rerun `./setup.sh`. Gazebo window crashes → use `gui:=false`. RViz ignores clicks → minimize and restore it, or `wsl --shutdown` from PowerShell.
