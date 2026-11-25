@@ -1,0 +1,1558 @@
+diff --git a/explore/CMakeLists.txt b/explore/CMakeLists.txt
+index 9895a56..027f376 100644
+--- a/explore/CMakeLists.txt
++++ b/explore/CMakeLists.txt
+@@ -93,6 +93,7 @@ target_link_libraries(explore PUBLIC
+   ${map_msgs_TARGETS}
+   ${nav2_msgs_TARGETS}
+   ${nav_msgs_TARGETS}
++  ${sensor_msgs_TARGETS}
+   ${std_msgs_TARGETS}
+   ${visualization_msgs_TARGETS}
+   nav2_costmap_2d::filters
+diff --git a/explore/include/explore/exit_detector.h b/explore/include/explore/exit_detector.h
+new file mode 100644
+index 0000000..3ca601e
+--- /dev/null
++++ b/explore/include/explore/exit_detector.h
+@@ -0,0 +1,119 @@
++#ifndef EXIT_DETECTOR_H_
++#define EXIT_DETECTOR_H_
++
++#include <cmath>
++#include <geometry_msgs/msg/point.hpp>
++#include <vector>
++
++namespace explore
++{
++/**
++ * @brief A lidar scan placed in the map frame.
++ *
++ * Gazebo's lidar reports infinity for a ray that hits nothing within range.
++ * slam_toolbox leaves such rays out of the map, so the space outside a maze
++ * exit stays unexplored, and a frontier remains in the opening. Rays that
++ * return nothing through a frontier show that nothing lies behind it within
++ * lidar range: it opens to the outside.
++ */
++struct ScanView {
++  double x{0.0}, y{0.0}, yaw{0.0};  // sensor pose in the map frame
++  double angle_min{0.0};
++  double angle_increment{0.0};
++  double range_min{0.0};
++  double range_max{0.0};
++  std::vector<float> ranges;
++  // The TurtleBot3 LDS driver reports 0 instead of infinity for "no return";
++  // with this set, readings below range_min count as no return too.
++  bool short_is_no_return{false};
++};
++
++/** @brief What one scan shows about the space behind a frontier. */
++struct ExitEvidence {
++  int points{0};     ///< frontier points
++  int no_return{0};  ///< points whose ray came back with nothing within range
++  int returned{0};   ///< points whose ray hit something behind the point
++  double ratio() const
++  {
++    return points > 0 ? static_cast<double>(no_return) / points : 0.0;
++  }
++};
++
++/**
++ * @brief Score frontier points against a scan.
++ *
++ * For each point within lidar range, look at the ray pointing at it. A ray
++ * that hits something before the point is blocked and tells nothing.
++ */
++inline ExitEvidence scoreFrontier(const std::vector<geometry_msgs::msg::Point>& points,
++                                  const ScanView& scan)
++{
++  ExitEvidence e;
++  e.points = static_cast<int>(points.size());
++  const int n = static_cast<int>(scan.ranges.size());
++  if (n == 0 || scan.angle_increment <= 0.0) {
++    return e;
++  }
++  const double two_pi = 2.0 * M_PI;
++  const bool full_circle = n * scan.angle_increment >= two_pi - scan.angle_increment;
++  // A point counts as "behind" a hit only if the hit is at least this much
++  // farther away: frontier cells border the walls they are next to.
++  const double margin = 0.05;
++  for (const auto& p : points) {
++    double dx = p.x - scan.x;
++    double dy = p.y - scan.y;
++    double d = std::hypot(dx, dy);
++    if (d >= scan.range_max) {
++      continue;  // out of lidar range: nothing to learn
++    }
++    double rel = std::fmod(std::atan2(dy, dx) - scan.yaw - scan.angle_min, two_pi);
++    if (rel < 0.0) {
++      rel += two_pi;
++    }
++    int i = static_cast<int>(std::lround(rel / scan.angle_increment));
++    if (i >= n) {
++      if (!full_circle) {
++        continue;  // outside the lidar's field of view
++      }
++      i %= n;
++    }
++    float r = scan.ranges[i];
++    bool no_return = !std::isfinite(r) || r >= scan.range_max ||
++                     (scan.short_is_no_return && r < scan.range_min);
++    if (no_return) {
++      e.no_return++;
++    } else if (r >= scan.range_min && r > d + margin) {
++      e.returned++;
++    }
++  }
++  return e;
++}
++
++/** @brief Thresholds for judging a frontier from one scan. */
++struct ExitThresholds {
++  double ratio{0.75};     ///< share of all frontier points with no return
++  int min_points{5};      ///< fewest no-return points
++  double disprove{0.25};  ///< no-return share of the seen-through points below which it is not an exit
++};
++
++enum class ExitVerdict {
++  UNKNOWN,   ///< not enough of the frontier was visible
++  OPEN,      ///< open to the outside from this viewpoint
++  ENCLOSED,  ///< the lidar saw walls behind it: not an exit
++};
++
++inline ExitVerdict judge(const ExitEvidence& e, const ExitThresholds& t)
++{
++  if (e.no_return >= t.min_points && e.ratio() >= t.ratio) {
++    return ExitVerdict::OPEN;
++  }
++  int seen = e.no_return + e.returned;
++  if (e.returned >= t.min_points &&
++      static_cast<double>(e.no_return) / seen < t.disprove) {
++    return ExitVerdict::ENCLOSED;
++  }
++  return ExitVerdict::UNKNOWN;
++}
++}  // namespace explore
++
++#endif
+diff --git a/explore/include/explore/exit_watch.h b/explore/include/explore/exit_watch.h
+new file mode 100644
+index 0000000..8d1a07e
+--- /dev/null
++++ b/explore/include/explore/exit_watch.h
+@@ -0,0 +1,94 @@
++#ifndef EXIT_WATCH_H_
++#define EXIT_WATCH_H_
++
++#include <geometry_msgs/msg/point.hpp>
++
++namespace explore
++{
++/**
++ * @brief Decides that a frontier is a maze exit by watching it from nearby.
++ *
++ * Close to an inner frontier, the lidar maps the space behind it within a
++ * map update or two, so the unknown area around it shrinks. Behind an exit the
++ * lidar gets no return, which the map leaves unknown. If the robot stays near
++ * a frontier and the unknown area around it does not shrink for long enough,
++ * the frontier opens to the outside.
++ */
++class ExitWatch
++{
++public:
++  /**
++   * @param distance  how near (m) the robot must be to a frontier cell it can see
++   * @param time      how long (s) the area must stop shrinking
++   * @param min_growth fewest cells the unknown area must shrink by to count as growth
++   */
++  ExitWatch(double distance = 0.6, double time = 6.0, int min_growth = 8)
++    : distance_(distance), time_(time), min_growth_(min_growth)
++  {
++  }
++
++  void reset()
++  {
++    watching_ = false;
++  }
++
++  bool watching() const
++  {
++    return watching_;
++  }
++
++  /** @brief Where to count unknown cells: the frontier as it was when watching began. */
++  const geometry_msgs::msg::Point& center() const
++  {
++    return center_;
++  }
++
++  /**
++   * @param now        time in seconds
++   * @param distance   robot's distance to the nearest frontier cell it can see (m)
++   * @param centroid   the frontier's centre now; used when watching begins
++   * @param unknown    unknown cells around center() (around @p centroid when
++   *                   not watching yet)
++   * @return true once the frontier counts as an exit
++   */
++  bool update(double now, double distance, const geometry_msgs::msg::Point& centroid,
++              int unknown)
++  {
++    if (distance > distance_) {
++      watching_ = false;  // too far for the lidar to see behind it
++      return false;
++    }
++    if (!watching_) {
++      watching_ = true;
++      center_ = centroid;
++      start_ = now;
++      unknown_ = unknown;
++      return false;
++    }
++    if (unknown_ - unknown >= min_growth_) {
++      // the lidar is still mapping the space behind it: time again from here
++      start_ = now;
++      unknown_ = unknown;
++      return false;
++    }
++    return now - start_ >= time_;
++  }
++
++  /** @brief Seconds the area has gone without shrinking, or 0 when not watching. */
++  double quietFor(double now) const
++  {
++    return watching_ ? now - start_ : 0.0;
++  }
++
++private:
++  double distance_;
++  double time_;
++  int min_growth_;
++  bool watching_{false};
++  geometry_msgs::msg::Point center_;
++  double start_{0.0};
++  int unknown_{0};
++};
++}  // namespace explore
++
++#endif
+diff --git a/explore/include/explore/explore.h b/explore/include/explore/explore.h
+index 82df47e..eb95932 100644
+--- a/explore/include/explore/explore.h
++++ b/explore/include/explore/explore.h
+@@ -39,6 +39,7 @@
+ #define NAV_EXPLORE_H_
+ 
+ #include <explore/costmap_client.h>
++#include <explore/exit_watch.h>
+ #include <explore/frontier_memory.h>
+ #include <explore/frontier_search.h>
+ #include <geometry_msgs/msg/pose_stamped.hpp>
+@@ -46,9 +47,12 @@
+ 
+ #include <chrono>
+ #include <cmath>
++#include <deque>
+ #include <explore_lite_msgs/msg/explore_status.hpp>
++#include <explore_lite_msgs/msg/frontier_array.hpp>
+ #include <geometry_msgs/msg/point.hpp>
+ #include <rclcpp/rclcpp.hpp>
++#include <sensor_msgs/msg/laser_scan.hpp>
+ #include <std_msgs/msg/bool.hpp>
+ #include <std_msgs/msg/color_rgba.hpp>
+ #include <string>
+@@ -97,6 +101,49 @@ private:
+   void visualizeFrontiers(
+       const std::vector<frontier_exploration::Frontier>& frontiers);
+ 
++  /**
++   * @brief Find frontiers, judge them with the lidar, and publish them.
++   * Runs at exit_check_frequency, so the robot turns away from an exit as soon
++   * as the lidar shows it, without waiting for the next plan.
++   */
++  void updateFrontiers();
++  /**
++   * @brief Judge each frontier with the latest scan: is it open to the outside?
++   * @return per frontier, the share of its points the scan saw no return
++   * through, or -1 if no scan could be placed in the map
++   */
++  std::vector<float> observeExits(
++      const std::vector<frontier_exploration::Frontier>& frontiers);
++  /** @brief Publish frontier markers, explore/frontier_states and explore/exits. */
++  void publishFrontiers(const std::vector<frontier_exploration::Frontier>& frontiers,
++                        const std::vector<float>& no_return_ratios);
++  void publishExits(const std::vector<frontier_exploration::Frontier>& frontiers);
++  /** @brief The committed frontier among @p frontiers, or nullptr. */
++  const frontier_exploration::Frontier* findCommitted(
++      const std::vector<frontier_exploration::Frontier>& frontiers) const;
++  /**
++   * @brief Let go of the committed frontier if it is a known maze exit.
++   * @return true if the robot is no longer committed
++   */
++  bool leaveForExit(const frontier_exploration::Frontier& current);
++  /**
++   * @brief Once the robot is near the committed frontier, time how long the
++   * map around it goes without growing. Long enough, and nothing there is
++   * coming into view: the frontier opens to the outside, a maze exit.
++   * @return true if the frontier was found to be an exit (no longer committed)
++   */
++  bool watchForExit(const frontier_exploration::Frontier& current,
++                    const geometry_msgs::msg::Point& robot);
++  /**
++   * @brief Straight-line distance from @p robot to the nearest cell of
++   * @p frontier that no wall in the map hides, or infinity if all are hidden.
++   */
++  double visibleDistance(const frontier_exploration::Frontier& frontier,
++                         const geometry_msgs::msg::Point& robot);
++  /** @brief Unknown map cells within @p radius of @p center. */
++  int countUnknown(const geometry_msgs::msg::Point& center, double radius);
++  void scanCallback(sensor_msgs::msg::LaserScan::ConstSharedPtr scan);
++
+   /**
+    * @brief Keep pursuing the committed frontier, or let go of it.
+    * @return true while the robot stays committed (nothing else to do this cycle)
+@@ -128,6 +175,15 @@ private:
+     * @brief Publisher for exploration status updates (see ExploreStatus.msg for status values)
+     */
+   rclcpp::Publisher<explore_lite_msgs::msg::ExploreStatus>::SharedPtr status_pub_;
++  /** @brief Every frontier with its state, for monitoring. */
++  rclcpp::Publisher<explore_lite_msgs::msg::FrontierArray>::SharedPtr frontier_states_pub_;
++  /** @brief Maze exits found so far (latched). */
++  rclcpp::Publisher<explore_lite_msgs::msg::FrontierArray>::SharedPtr exits_pub_;
++  std::vector<geometry_msgs::msg::Point> published_exits_;
++
++  rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_subscription_;
++  std::deque<sensor_msgs::msg::LaserScan::ConstSharedPtr> scans_;  // newest last
++  rclcpp::TimerBase::SharedPtr exit_timer_;
+ 
+   rclcpp::Logger logger_;
+   tf2_ros::Buffer tf_buffer_;
+@@ -147,6 +203,7 @@ private:
+   // The frontier the robot is committed to. It keeps that frontier until it is
+   // explored, reached, or given up, even if another frontier scores better.
+   bool committed_{false};
++  ExitWatch watch_;  // the committed frontier, watched from nearby
+   std::size_t committed_entry_{0};             // its entry in memory_
+   geometry_msgs::msg::Point committed_goal_;   // goal sent to Nav2
+   geometry_msgs::msg::Point committed_where_;  // where the frontier is now
+@@ -181,6 +238,14 @@ private:
+   int max_frontier_attempts_;
+   int nav2_retries_;
+   double nav2_retry_delay_;
++  bool exit_detection_;
++  ExitThresholds exit_thresholds_;
++  int exit_confirm_views_;
++  double exit_view_separation_;
++  double exit_confirm_distance_;
++  double exit_watch_time_;
++  double exit_watch_radius_;
++  bool lidar_short_is_no_return_;
+   bool visualize_;
+   bool return_to_init_;
+   std::string robot_base_frame_;
+diff --git a/explore/include/explore/frontier_memory.h b/explore/include/explore/frontier_memory.h
+index fe146c4..34c4efd 100644
+--- a/explore/include/explore/frontier_memory.h
++++ b/explore/include/explore/frontier_memory.h
+@@ -1,6 +1,7 @@
+ #ifndef FRONTIER_MEMORY_H_
+ #define FRONTIER_MEMORY_H_
+ 
++#include <explore/exit_detector.h>
+ #include <explore/frontier_search.h>
+ 
+ #include <cmath>
+@@ -15,17 +16,34 @@ namespace explore
+  *
+  * Frontiers are found again from scratch on every search and change shape as
+  * the map grows, so a frontier is recognised by being near a remembered point.
+- * Each remembered frontier has a state and a count of how often the robot has
+- * set out for it.
++ * Each remembered frontier has a state, a count of how often the robot has
++ * set out for it, and the robot positions from which the lidar saw it open to
++ * the outside.
+  */
+ class FrontierMemory
+ {
+ public:
+   enum class State {
+-    OPEN,       ///< may be chosen as a goal
+-    POSTPONED,  ///< given up for now; re-opened once no open frontier is left
+-    EXIT,       ///< reached but stayed unexplored: a maze exit, never a goal
+-    ABANDONED,  ///< given up too often; never a goal again
++    OPEN,            ///< may be chosen as a goal
++    POSTPONED,       ///< given up for now; re-opened once no open frontier is left
++    EXIT,            ///< open to the outside: a maze exit, never a goal
++    ABANDONED,       ///< given up too often; never a goal again
++    EXIT_CANDIDATE,  ///< the lidar saw it open to the outside once; tried after open ones
++  };
++
++  struct Entry {
++    geometry_msgs::msg::Point point;
++    State state;
++    int attempts;
++    // robot positions from which the lidar saw the frontier open to the outside
++    std::vector<geometry_msgs::msg::Point> exit_views;
++  };
++
++  /** @brief What observe() did. */
++  struct Observation {
++    std::size_t index;  ///< entry, or size of entries() if none
++    State before;
++    State after;
+   };
+ 
+   explicit FrontierMemory(double match_radius = 0.3) : match_radius_(match_radius)
+@@ -55,7 +73,7 @@ public:
+ 
+   /**
+    * @brief State of a frontier. If it matches several remembered frontiers,
+-   * the most restrictive state wins (exit, then abandoned, then postponed).
++   * the most restrictive state wins (exit, abandoned, exit candidate, postponed).
+    */
+   State state(const frontier_exploration::Frontier& frontier) const
+   {
+@@ -77,13 +95,126 @@ public:
+   {
+     std::size_t index = find(frontier);
+     if (index == entries_.size()) {
+-      entries_.push_back(Entry{frontier.centroid, State::OPEN, 0});
++      entries_.push_back(Entry{frontier.centroid, State::OPEN, 0, {}});
++    }
++    if (entries_[index].state != State::EXIT_CANDIDATE) {
++      entries_[index].state = State::OPEN;
+     }
+-    entries_[index].state = State::OPEN;
+     entries_[index].attempts++;
+     return index;
+   }
+ 
++  /**
++   * @brief Record what the lidar showed about @p frontier from @p viewpoint.
++   *
++   * Seen open to the outside, the frontier becomes an exit candidate, and an
++   * exit once that has been seen from @p confirm_views positions at least
++   * @p separation apart (turning on the spot is not a new look). Seen with walls
++   * behind it, a candidate is open again: the earlier look was through it and
++   * out of an exit further on.
++   *
++   * @p all is every frontier found in the same search. The look counts only for
++   * the remembered frontier that @p frontier stands for (see owner()), so a
++   * neighbouring frontier can neither confirm nor overrule an exit.
++   */
++  Observation observe(const frontier_exploration::Frontier& frontier,
++                      const std::vector<frontier_exploration::Frontier>& all,
++                      ExitVerdict verdict, const geometry_msgs::msg::Point& viewpoint,
++                      double separation, int confirm_views)
++  {
++    std::size_t index = owner(frontier, all);
++    if (index == entries_.size()) {
++      if (verdict != ExitVerdict::OPEN) {
++        return Observation{index, State::OPEN, State::OPEN};
++      }
++      entries_.push_back(Entry{frontier.centroid, State::OPEN, 0, {}});
++    }
++    Entry& entry = entries_[index];
++    Observation result{index, entry.state, entry.state};
++    if (verdict == ExitVerdict::OPEN) {
++      entry.point = frontier.centroid;
++      bool new_view = true;
++      for (const auto& v : entry.exit_views) {
++        if (distance(v, viewpoint) < separation) {
++          new_view = false;
++          break;
++        }
++      }
++      if (new_view) {
++        entry.exit_views.push_back(viewpoint);
++      }
++      if (entry.state != State::EXIT) {
++        if (static_cast<int>(entry.exit_views.size()) >= confirm_views) {
++          entry.state = State::EXIT;
++        } else if (entry.state == State::OPEN || entry.state == State::POSTPONED) {
++          entry.state = State::EXIT_CANDIDATE;
++        }
++      }
++    } else if (verdict == ExitVerdict::ENCLOSED && !entry.exit_views.empty() &&
++               entry.state != State::EXIT) {
++      entry.exit_views.clear();
++      if (entry.state == State::EXIT_CANDIDATE) {
++        entry.state = State::OPEN;
++      }
++    }
++    result.after = entry.state;
++    return result;
++  }
++
++  const std::vector<Entry>& entries() const
++  {
++    return entries_;
++  }
++
++  /**
++   * @brief The remembered frontier that @p frontier is, among @p all found in
++   * the same search: one whose point is within the match radius of its centre,
++   * with no other frontier in @p all closer to that point. size() if none.
++   */
++  std::size_t owner(const frontier_exploration::Frontier& frontier,
++                    const std::vector<frontier_exploration::Frontier>& all) const
++  {
++    std::size_t best = entries_.size();
++    double best_distance = 0.0;
++    for (std::size_t i = 0; i < entries_.size(); ++i) {
++      double d = distance(entries_[i].point, frontier.centroid);
++      if (d > match_radius_ || (best != entries_.size() && d >= best_distance)) {
++        continue;
++      }
++      bool closest = true;
++      for (const auto& other : all) {
++        if (&other != &frontier &&
++            distance(entries_[i].point, other.centroid) < d) {
++          closest = false;
++          break;
++        }
++      }
++      if (closest) {
++        best = i;
++        best_distance = d;
++      }
++    }
++    return best;
++  }
++
++  /** @brief Index of the entry that matches @p frontier (nearest first), or size() if none. */
++  std::size_t find(const frontier_exploration::Frontier& frontier) const
++  {
++    std::size_t best = entries_.size();
++    double best_distance = 0.0;
++    for (std::size_t i = 0; i < entries_.size(); ++i) {
++      if (!matches(frontier, entries_[i].point, match_radius_)) {
++        continue;
++      }
++      double d = distance(entries_[i].point, frontier.centroid);
++      if (best == entries_.size() || d < best_distance) {
++        best = i;
++        best_distance = d;
++      }
++    }
++    return best;
++  }
++
+   double matchRadius() const
+   {
+     return match_radius_;
+@@ -94,11 +225,35 @@ public:
+     return entries_.at(index).attempts;
+   }
+ 
+-  /** @brief Set the state and move the remembered point to where the frontier is now. */
++  /**
++   * @brief Set the state and move the remembered point to where the frontier is now.
++   * A maze exit is left as it is: an exit stays an exit, where it was found.
++   */
+   void set(std::size_t index, State state, const geometry_msgs::msg::Point& point)
+   {
+-    entries_.at(index).state = state;
+-    entries_.at(index).point = point;
++    Entry& entry = entries_.at(index);
++    if (entry.state == State::EXIT) {
++      return;
++    }
++    entry.state = state;
++    track(index, point);
++  }
++
++  /**
++   * @brief Move the remembered point along with its frontier as the map grows.
++   * Lidar looks from before a big move were at whatever was there before, so
++   * they are dropped.
++   */
++  void track(std::size_t index, const geometry_msgs::msg::Point& point)
++  {
++    Entry& entry = entries_.at(index);
++    if (entry.state == State::EXIT) {
++      return;
++    }
++    if (distance(entry.point, point) > match_radius_) {
++      entry.exit_views.clear();
++    }
++    entry.point = point;
+   }
+ 
+   /** @brief Re-open every postponed frontier. @return how many were re-opened. */
+@@ -115,18 +270,14 @@ public:
+   }
+ 
+ private:
+-  struct Entry {
+-    geometry_msgs::msg::Point point;
+-    State state;
+-    int attempts;
+-  };
+-
+   static int rank(State state)
+   {
+     switch (state) {
+       case State::EXIT:
+-        return 3;
++        return 4;
+       case State::ABANDONED:
++        return 3;
++      case State::EXIT_CANDIDATE:
+         return 2;
+       case State::POSTPONED:
+         return 1;
+@@ -135,24 +286,6 @@ private:
+     }
+   }
+ 
+-  /** @brief Index of the entry that matches @p frontier (nearest first), or size() if none. */
+-  std::size_t find(const frontier_exploration::Frontier& frontier) const
+-  {
+-    std::size_t best = entries_.size();
+-    double best_distance = 0.0;
+-    for (std::size_t i = 0; i < entries_.size(); ++i) {
+-      if (!matches(frontier, entries_[i].point, match_radius_)) {
+-        continue;
+-      }
+-      double d = distance(entries_[i].point, frontier.centroid);
+-      if (best == entries_.size() || d < best_distance) {
+-        best = i;
+-        best_distance = d;
+-      }
+-    }
+-    return best;
+-  }
+-
+   double match_radius_;
+   std::vector<Entry> entries_;
+ };
+diff --git a/explore/package.xml b/explore/package.xml
+index 210812c..a741523 100644
+--- a/explore/package.xml
++++ b/explore/package.xml
+@@ -21,6 +21,7 @@
+   <depend>nav2_msgs</depend>
+   <depend>nav_msgs</depend>
+   <depend>rclcpp</depend>
++  <depend>sensor_msgs</depend>
+   <depend>std_msgs</depend>
+   <depend>tf2</depend>
+   <depend>tf2_ros</depend>
+diff --git a/explore/src/explore.cpp b/explore/src/explore.cpp
+index 4481701..e929211 100644
+--- a/explore/src/explore.cpp
++++ b/explore/src/explore.cpp
+@@ -39,6 +39,7 @@
+ #include <explore/explore.h>
+ 
+ #include <algorithm>
++#include <limits>
+ #include <cstdio>
+ #include <string>
+ #include <thread>
+@@ -54,6 +55,9 @@ inline static bool same_point(const geometry_msgs::msg::Point& one,
+ 
+ namespace explore
+ {
++using frontier_exploration::Frontier;
++using State = FrontierMemory::State;
++
+ Explore::Explore()
+   : Node("explore_node")
+   , logger_(this->get_logger())
+@@ -80,8 +84,40 @@ Explore::Explore()
+   this->declare_parameter<int>("max_frontier_attempts", 3);
+   this->declare_parameter<int>("nav2_retries", 2);
+   this->declare_parameter<float>("nav2_retry_delay", 2.0);
++  // Lidar exit detection (patches/m-explore-ros2/0004)
++  this->declare_parameter<bool>("exit_detection", true);
++  this->declare_parameter<std::string>("scan_topic", "scan");
++  this->declare_parameter<float>("exit_check_frequency", 2.0);
++  this->declare_parameter<float>("exit_no_return_ratio", 0.75);
++  this->declare_parameter<int>("exit_min_no_return_points", 5);
++  this->declare_parameter<float>("exit_disprove_ratio", 0.25);
++  this->declare_parameter<int>("exit_confirm_views", 2);
++  this->declare_parameter<float>("exit_view_separation", 0.3);
++  this->declare_parameter<float>("exit_confirm_distance", 0.25);
++  this->declare_parameter<float>("exit_watch_distance", 0.6);
++  this->declare_parameter<float>("exit_watch_time", 6.0);
++  this->declare_parameter<float>("exit_watch_radius", 0.5);
++  this->declare_parameter<float>("exit_watch_min_growth", 0.02);
++  this->declare_parameter<bool>("lidar_short_is_no_return", false);
+ 
+   double match_radius;
++  double exit_check_frequency;
++  std::string scan_topic;
++  this->get_parameter("exit_detection", exit_detection_);
++  this->get_parameter("scan_topic", scan_topic);
++  this->get_parameter("exit_check_frequency", exit_check_frequency);
++  this->get_parameter("exit_no_return_ratio", exit_thresholds_.ratio);
++  this->get_parameter("exit_min_no_return_points", exit_thresholds_.min_points);
++  this->get_parameter("exit_disprove_ratio", exit_thresholds_.disprove);
++  this->get_parameter("exit_confirm_views", exit_confirm_views_);
++  this->get_parameter("exit_view_separation", exit_view_separation_);
++  this->get_parameter("exit_confirm_distance", exit_confirm_distance_);
++  double exit_watch_distance, exit_watch_min_growth;
++  this->get_parameter("exit_watch_distance", exit_watch_distance);
++  this->get_parameter("exit_watch_time", exit_watch_time_);
++  this->get_parameter("exit_watch_radius", exit_watch_radius_);
++  this->get_parameter("exit_watch_min_growth", exit_watch_min_growth);
++  this->get_parameter("lidar_short_is_no_return", lidar_short_is_no_return_);
+   this->get_parameter("commit_timeout", commit_timeout_);
+   this->get_parameter("exit_settle_time", exit_settle_time_);
+   this->get_parameter("exit_reach_distance", exit_reach_distance_);
+@@ -106,6 +142,13 @@ Explore::Explore()
+       rclcpp_action::create_client<nav2_msgs::action::NavigateToPose>(
+           this, ACTION_NAME);
+ 
++  {
++    double cell = costmap_client_.getCostmap()->getResolution();
++    int min_growth = std::max(
++        1, static_cast<int>(std::lround(exit_watch_min_growth / (cell * cell))));
++    watch_ = ExitWatch(exit_watch_distance, exit_watch_time_, min_growth);
++  }
++
+   search_ = frontier_exploration::FrontierSearch(costmap_client_.getCostmap(),
+                                                  potential_scale_, gain_scale_,
+                                                  min_frontier_size, logger_);
+@@ -122,6 +165,16 @@ Explore::Explore()
+   rclcpp::QoS status_qos(10);
+   status_qos.transient_local();
+   status_pub_ = this->create_publisher<explore_lite_msgs::msg::ExploreStatus>("explore/status", status_qos);
++  frontier_states_pub_ = this->create_publisher<explore_lite_msgs::msg::FrontierArray>(
++      "explore/frontier_states", 10);
++  exits_pub_ = this->create_publisher<explore_lite_msgs::msg::FrontierArray>(
++      "explore/exits", status_qos);
++
++  if (exit_detection_) {
++    scan_subscription_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
++        scan_topic, rclcpp::SensorDataQoS(),
++        std::bind(&Explore::scanCallback, this, std::placeholders::_1));
++  }
+ 
+   // Subscription to resume or stop exploration
+   resume_subscription_ = this->create_subscription<std_msgs::msg::Bool>(
+@@ -152,6 +205,11 @@ Explore::Explore()
+   exploring_timer_ = this->create_wall_timer(
+       std::chrono::milliseconds((uint16_t)(1000.0 / planner_frequency_)),
+       [this]() { makePlan(); });
++  if (exit_check_frequency > 0.0) {
++    exit_timer_ = this->create_wall_timer(
++        std::chrono::milliseconds((int)(1000.0 / exit_check_frequency)),
++        [this]() { updateFrontiers(); });
++  }
+   // Start exploration right away
+   auto status_msg = explore_lite_msgs::msg::ExploreStatus();
+   status_msg.status = explore_lite_msgs::msg::ExploreStatus::EXPLORATION_STARTED;
+@@ -183,6 +241,8 @@ void Explore::visualizeFrontiers(
+       std_msgs::msg::ColorRGBA().set__r(1.0).set__g(0.5).set__a(0.5);
+   const auto purple =
+       std_msgs::msg::ColorRGBA().set__r(0.6).set__b(1.0).set__a(0.5);
++  const auto yellow =
++      std_msgs::msg::ColorRGBA().set__r(1.0).set__g(0.9).set__a(0.5);
+ 
+   RCLCPP_DEBUG(logger_, "visualising %lu frontiers", frontiers.size());
+   visualization_msgs::msg::MarkerArray markers_msg;
+@@ -217,8 +277,12 @@ void Explore::visualizeFrontiers(
+     m.scale.y = 0.1;
+     m.scale.z = 0.1;
+     m.points = frontier.points;
+-    // blue: open, orange: postponed, purple: maze exit, red: abandoned
++    // blue: open, yellow: exit candidate, orange: postponed, purple: maze
++    // exit, red: abandoned
+     switch (memory_.state(frontier)) {
++      case FrontierMemory::State::EXIT_CANDIDATE:
++        m.color = yellow;
++        break;
+       case FrontierMemory::State::POSTPONED:
+         m.color = orange;
+         break;
+@@ -269,15 +333,15 @@ void Explore::makePlan()
+     RCLCPP_DEBUG(logger_, "frontier %zd cost: %f", i, frontiers[i].cost);
+   }
+ 
++  auto no_return_ratios = observeExits(frontiers);
++
+   // Stay with the committed frontier while it is still worth pursuing, even
+   // if another frontier now scores better.
+   bool stay = committed_ && continueCommitment(frontiers, pose.position);
+ 
+-  // publish frontiers as visualization markers (after continueCommitment,
+-  // which may have just changed a frontier's state)
+-  if (visualize_) {
+-    visualizeFrontiers(frontiers);
+-  }
++  // publish frontiers (after continueCommitment, which may have just changed
++  // a frontier's state)
++  publishFrontiers(frontiers, no_return_ratios);
+   if (stay) {
+     return;
+   }
+@@ -287,11 +351,16 @@ void Explore::makePlan()
+     return;
+   }
+ 
++  // Probable exits are chosen like open frontiers, cheapest first: the lidar
++  // is often fooled by an inner opening that lines up with an exit, and
++  // putting them off makes the robot cross the maze back and forth. Getting
++  // close decides (see watchForExit), unless the lidar confirms it first.
+   auto pick_open = [&]() {
+     return std::find_if(frontiers.begin(), frontiers.end(),
+-                        [this](const frontier_exploration::Frontier& f) {
+-                          return memory_.state(f) ==
+-                                 FrontierMemory::State::OPEN;
++                        [this](const Frontier& f) {
++                          State state = memory_.state(f);
++                          return state == State::OPEN ||
++                                 state == State::EXIT_CANDIDATE;
+                         });
+   };
+   auto frontier = pick_open();
+@@ -316,17 +385,13 @@ bool Explore::continueCommitment(
+     const std::vector<frontier_exploration::Frontier>& frontiers,
+     const geometry_msgs::msg::Point& robot)
+ {
+-  // Find the committed frontier again. It moves and changes shape as the map
+-  // grows, so look for it where it was last seen.
+-  const frontier_exploration::Frontier* current = nullptr;
+-  for (const auto& f : frontiers) {
+-    if (FrontierMemory::matches(f, committed_where_, memory_.matchRadius())) {
+-      current = &f;
+-      break;
+-    }
+-  }
++  const Frontier* current = findCommitted(frontiers);
+   if (current) {
+     committed_where_ = current->centroid;
++    memory_.track(committed_entry_, committed_where_);
++    if (!settling_ && (leaveForExit(*current) || watchForExit(*current, robot))) {
++      return false;
++    }
+   }
+ 
+   if (settling_) {
+@@ -418,9 +483,338 @@ bool Explore::continueCommitment(
+   return true;
+ }
+ 
++const Frontier* Explore::findCommitted(const std::vector<Frontier>& frontiers) const
++{
++  // The committed frontier moves and changes shape as the map grows, so look
++  // for it where it was last seen.
++  for (const auto& f : frontiers) {
++    if (FrontierMemory::matches(f, committed_where_, memory_.matchRadius())) {
++      return &f;
++    }
++  }
++  return nullptr;
++}
++
++bool Explore::leaveForExit(const Frontier& current)
++{
++  if (memory_.state(current) != State::EXIT) {
++    return false;
++  }
++  committed_ = false;
++  watch_.reset();
++  RCLCPP_INFO(logger_,
++              "Frontier at (%.2f, %.2f) is a maze exit: heading for another "
++              "frontier",
++              committed_where_.x, committed_where_.y);
++  return true;
++}
++
++int Explore::countUnknown(const geometry_msgs::msg::Point& center, double radius)
++{
++  nav2_costmap_2d::Costmap2D* costmap = costmap_client_.getCostmap();
++  std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap->getMutex()));
++  const double res = costmap->getResolution();
++  const int r = static_cast<int>(std::ceil(radius / res));
++  int cx, cy;
++  costmap->worldToMapNoBounds(center.x, center.y, cx, cy);
++  const int size_x = static_cast<int>(costmap->getSizeInCellsX());
++  const int size_y = static_cast<int>(costmap->getSizeInCellsY());
++  int count = 0;
++  for (int y = cy - r; y <= cy + r; ++y) {
++    for (int x = cx - r; x <= cx + r; ++x) {
++      if ((x - cx) * (x - cx) + (y - cy) * (y - cy) > r * r) {
++        continue;
++      }
++      // Cells beyond the edge of the map are unknown too: the map grows to
++      // take in whatever the lidar sees there.
++      if (x < 0 || y < 0 || x >= size_x || y >= size_y ||
++          costmap->getCost(x, y) == nav2_costmap_2d::NO_INFORMATION) {
++        ++count;
++      }
++    }
++  }
++  return count;
++}
++
++double Explore::visibleDistance(const Frontier& frontier,
++                                const geometry_msgs::msg::Point& robot)
++{
++  nav2_costmap_2d::Costmap2D* costmap = costmap_client_.getCostmap();
++  std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap->getMutex()));
++  unsigned int rx, ry;
++  if (!costmap->worldToMap(robot.x, robot.y, rx, ry)) {
++    return std::numeric_limits<double>::infinity();
++  }
++  auto wall = [costmap](int x, int y) {
++    unsigned char cost = costmap->getCost(x, y);
++    return cost >= nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE &&
++           cost != nav2_costmap_2d::NO_INFORMATION;
++  };
++  double best = std::numeric_limits<double>::infinity();
++  for (const auto& p : frontier.points) {
++    double d = FrontierMemory::distance(robot, p);
++    unsigned int px, py;
++    if (d >= best || !costmap->worldToMap(p.x, p.y, px, py)) {
++      continue;
++    }
++    // walk the cells between the robot and the frontier cell (Bresenham)
++    int x = rx, y = ry;
++    const int dx = std::abs(static_cast<int>(px) - x);
++    const int dy = -std::abs(static_cast<int>(py) - y);
++    const int sx = x < static_cast<int>(px) ? 1 : -1;
++    const int sy = y < static_cast<int>(py) ? 1 : -1;
++    int err = dx + dy;
++    bool hidden = false;
++    while (!(x == static_cast<int>(px) && y == static_cast<int>(py))) {
++      if (wall(x, y)) {
++        hidden = true;
++        break;
++      }
++      int e2 = 2 * err;
++      if (e2 >= dy) {
++        err += dy;
++        x += sx;
++      }
++      if (e2 <= dx) {
++        err += dx;
++        y += sy;
++      }
++    }
++    if (!hidden) {
++      best = d;
++    }
++  }
++  return best;
++}
++
++bool Explore::watchForExit(const Frontier& current,
++                           const geometry_msgs::msg::Point& robot)
++{
++  const auto& center = watch_.watching() ? watch_.center() : current.centroid;
++  int unknown = countUnknown(center, exit_watch_radius_);
++  if (!watch_.update(this->now().seconds(), visibleDistance(current, robot),
++                     current.centroid, unknown)) {
++    return false;
++  }
++  memory_.set(committed_entry_, State::EXIT, current.centroid);
++  committed_ = false;
++  watch_.reset();
++  RCLCPP_INFO(logger_,
++              "Frontier at (%.2f, %.2f) is a maze exit: the robot has had it "
++              "in view from within %.2f m and the map around it has not grown "
++              "for %.0f s. Heading for another frontier",
++              current.centroid.x, current.centroid.y,
++              visibleDistance(current, robot), exit_watch_time_);
++  return true;
++}
++
++void Explore::scanCallback(sensor_msgs::msg::LaserScan::ConstSharedPtr scan)
++{
++  scans_.push_back(scan);
++  while (scans_.size() > 20) {
++    scans_.pop_front();
++  }
++}
++
++std::vector<float> Explore::observeExits(const std::vector<Frontier>& frontiers)
++{
++  std::vector<float> ratios(frontiers.size(), -1.0f);
++  if (!exit_detection_) {
++    return ratios;
++  }
++  // The newest scan whose position in the map is known. The map->odom
++  // transform often lags the scan by a few tenths of a second.
++  const std::string map_frame = costmap_client_.getGlobalFrameID();
++  const rclcpp::Time now = this->now();
++  ScanView view;
++  bool placed = false;
++  for (auto it = scans_.rbegin(); it != scans_.rend() && !placed; ++it) {
++    const auto& scan = **it;
++    rclcpp::Time stamp(scan.header.stamp, now.get_clock_type());
++    if (now - stamp > rclcpp::Duration::from_seconds(2.0)) {
++      break;  // older ones are staler still
++    }
++    geometry_msgs::msg::TransformStamped tf;
++    try {
++      tf = tf_buffer_.lookupTransform(map_frame, scan.header.frame_id, stamp);
++    } catch (const tf2::TransformException&) {
++      continue;
++    }
++    const auto& q = tf.transform.rotation;
++    view.x = tf.transform.translation.x;
++    view.y = tf.transform.translation.y;
++    view.yaw = std::atan2(2.0 * (q.w * q.z + q.x * q.y),
++                          1.0 - 2.0 * (q.y * q.y + q.z * q.z));
++    view.angle_min = scan.angle_min;
++    view.angle_increment = scan.angle_increment;
++    view.range_min = scan.range_min;
++    view.range_max = scan.range_max;
++    view.ranges = scan.ranges;
++    view.short_is_no_return = lidar_short_is_no_return_;
++    placed = true;
++  }
++  if (!placed) {
++    return ratios;
++  }
++  geometry_msgs::msg::Point viewpoint;
++  viewpoint.x = view.x;
++  viewpoint.y = view.y;
++
++  for (std::size_t i = 0; i < frontiers.size(); ++i) {
++    const Frontier& f = frontiers[i];
++    ExitEvidence evidence = scoreFrontier(f.points, view);
++    ratios[i] = static_cast<float>(evidence.ratio());
++    ExitVerdict verdict = judge(evidence, exit_thresholds_);
++    if (verdict == ExitVerdict::UNKNOWN) {
++      continue;
++    }
++    // From right next to it, the rays through the frontier fan out widely: if
++    // none of them comes back, one look is enough.
++    bool close = f.min_distance <= exit_confirm_distance_;
++    auto seen = memory_.observe(f, frontiers, verdict, viewpoint,
++                                exit_view_separation_,
++                                close ? 1 : exit_confirm_views_);
++    if (seen.before == seen.after) {
++      continue;
++    }
++    if (seen.after == State::EXIT) {
++      RCLCPP_INFO(logger_,
++                  "Frontier at (%.2f, %.2f) is a maze exit: the lidar saw no "
++                  "return through it from %zu position(s)%s",
++                  f.centroid.x, f.centroid.y,
++                  memory_.entries()[seen.index].exit_views.size(),
++                  close ? ", right next to it" : "");
++    } else if (seen.after == State::EXIT_CANDIDATE) {
++      RCLCPP_INFO(logger_,
++                  "Frontier at (%.2f, %.2f) looks like a maze exit: the lidar "
++                  "sees no return through %d of its %d points. A look from "
++                  "another position, or getting close, decides",
++                  f.centroid.x, f.centroid.y, evidence.no_return, evidence.points);
++    } else if (seen.before == State::EXIT_CANDIDATE) {
++      RCLCPP_INFO(logger_,
++                  "Frontier at (%.2f, %.2f) is not an exit after all: the lidar "
++                  "sees walls behind it",
++                  f.centroid.x, f.centroid.y);
++    }
++  }
++  return ratios;
++}
++
++void Explore::updateFrontiers()
++{
++  auto pose = costmap_client_.getRobotPose();
++  auto frontiers = search_.searchFrom(pose.position);
++  auto no_return_ratios = observeExits(frontiers);
++  bool replan = false;
++  if (committed_ && !settling_ && !exploring_timer_->is_canceled()) {
++    const Frontier* current = findCommitted(frontiers);
++    if (current) {
++      committed_where_ = current->centroid;
++      memory_.track(committed_entry_, committed_where_);
++      replan = leaveForExit(*current) || watchForExit(*current, pose.position);
++    }
++  }
++  if (replan) {
++    makePlan();  // publishes the frontiers too
++  } else {
++    publishFrontiers(frontiers, no_return_ratios);
++  }
++}
++
++static uint8_t stateToMsg(State state)
++{
++  using explore_lite_msgs::msg::Frontier;
++  switch (state) {
++    case State::EXIT_CANDIDATE:
++      return Frontier::EXIT_CANDIDATE;
++    case State::EXIT:
++      return Frontier::EXIT;
++    case State::POSTPONED:
++      return Frontier::POSTPONED;
++    case State::ABANDONED:
++      return Frontier::ABANDONED;
++    default:
++      return Frontier::OPEN;
++  }
++}
++
++void Explore::publishFrontiers(const std::vector<Frontier>& frontiers,
++                               const std::vector<float>& no_return_ratios)
++{
++  if (visualize_) {
++    visualizeFrontiers(frontiers);
++  }
++  explore_lite_msgs::msg::FrontierArray msg;
++  msg.header.frame_id = costmap_client_.getGlobalFrameID();
++  msg.header.stamp = this->now();
++  for (std::size_t i = 0; i < frontiers.size(); ++i) {
++    const Frontier& f = frontiers[i];
++    explore_lite_msgs::msg::Frontier out;
++    out.centroid = f.centroid;
++    out.points = f.points;
++    out.state = stateToMsg(memory_.state(f));
++    out.cost = f.cost;
++    out.path_distance = f.min_distance;
++    out.no_return_ratio = i < no_return_ratios.size() ? no_return_ratios[i] : -1.0f;
++    std::size_t index = memory_.find(f);
++    if (index < memory_.entries().size()) {
++      out.exit_views = memory_.entries()[index].exit_views.size();
++      out.attempts = memory_.entries()[index].attempts;
++    }
++    out.goal = committed_ &&
++               FrontierMemory::matches(f, committed_where_, memory_.matchRadius());
++    msg.frontiers.push_back(out);
++  }
++  frontier_states_pub_->publish(msg);
++  publishExits(frontiers);
++}
++
++void Explore::publishExits(const std::vector<Frontier>& frontiers)
++{
++  // Every exit found so far, also those no longer in the frontier list (when
++  // the map around them changed). Published only when the list changes.
++  explore_lite_msgs::msg::FrontierArray msg;
++  msg.header.frame_id = costmap_client_.getGlobalFrameID();
++  msg.header.stamp = this->now();
++  std::vector<geometry_msgs::msg::Point> points;
++  for (const auto& entry : memory_.entries()) {
++    if (entry.state != State::EXIT) {
++      continue;
++    }
++    explore_lite_msgs::msg::Frontier out;
++    out.centroid = entry.point;
++    out.state = explore_lite_msgs::msg::Frontier::EXIT;
++    out.no_return_ratio = -1.0f;
++    out.exit_views = entry.exit_views.size();
++    out.attempts = entry.attempts;
++    for (const auto& f : frontiers) {
++      if (FrontierMemory::matches(f, entry.point, memory_.matchRadius())) {
++        out.centroid = f.centroid;
++        out.points = f.points;
++        out.cost = f.cost;
++        out.path_distance = f.min_distance;
++        break;
++      }
++    }
++    points.push_back(out.centroid);
++    msg.frontiers.push_back(out);
++  }
++  bool changed = points.size() != published_exits_.size();
++  for (std::size_t i = 0; !changed && i < points.size(); ++i) {
++    changed = FrontierMemory::distance(points[i], published_exits_[i]) > 0.1;
++  }
++  if (!changed) {
++    return;
++  }
++  published_exits_ = points;
++  exits_pub_->publish(msg);
++}
++
+ void Explore::commitTo(const frontier_exploration::Frontier& frontier)
+ {
+   committed_ = true;
++  watch_.reset();
++  bool candidate = memory_.state(frontier) == State::EXIT_CANDIDATE;
+   settling_ = false;
+   committed_goal_ = frontier.centroid;
+   committed_where_ = frontier.centroid;
+@@ -429,7 +823,8 @@ void Explore::commitTo(const frontier_exploration::Frontier& frontier)
+   commit_start_ = this->now();
+   last_progress_ = commit_start_;
+   prev_distance_ = frontier.min_distance;
+-  RCLCPP_INFO(logger_, "Heading for frontier at (%.2f, %.2f), attempt %d",
++  RCLCPP_INFO(logger_, "Heading for %sfrontier at (%.2f, %.2f), attempt %d",
++              candidate ? "probable exit " : "",
+               committed_goal_.x, committed_goal_.y,
+               memory_.attempts(committed_entry_));
+   sendGoal(committed_goal_);
+@@ -687,6 +1082,7 @@ void Explore::stop(bool finished_exploring)
+ 
+   goal_active_ = false;
+   settling_ = false;
++  watch_.reset();
+   if (settle_timer_) {
+     settle_timer_->cancel();
+   }
+@@ -732,6 +1128,7 @@ void Explore::resume()
+   }
+   // don't count the paused time against the committed frontier
+   commit_start_ = this->now();
++  watch_.reset();
+   last_progress_ = commit_start_;
+   RCLCPP_INFO(logger_, "Exploration resuming.");
+   auto status_msg = explore_lite_msgs::msg::ExploreStatus();
+diff --git a/explore/test/test_explore.cpp b/explore/test/test_explore.cpp
+index d94278d..b392b4c 100644
+--- a/explore/test/test_explore.cpp
++++ b/explore/test/test_explore.cpp
+@@ -71,6 +71,7 @@ TEST(Explore, testSameGoal)
+ }
+ 
+ #include <explore/frontier_memory.h>
++#include <limits>
+ 
+ using explore::FrontierMemory;
+ 
+@@ -152,6 +153,278 @@ TEST(FrontierMemory, exitWinsWhenFrontiersOverlap)
+   EXPECT_EQ(memory.state(frontier(0.0, 0.8, 0.0)), FrontierMemory::State::EXIT);
+ }
+ 
++// ---------------------------------------------------------------- exit detection
++#include <explore/exit_detector.h>
++
++using explore::ExitThresholds;
++using explore::ExitVerdict;
++using explore::ScanView;
++
++// A full-circle scan at the origin facing +x: every ray hits a wall at @p range,
++// except those within @p open_deg of @p open_bearing_deg, which return nothing.
++static ScanView scan(double range, double open_bearing_deg = 0.0,
++                     double open_deg = -1.0, double yaw = 0.0)
++{
++  ScanView v;
++  v.yaw = yaw;
++  v.angle_min = 0.0;
++  v.angle_increment = 2.0 * M_PI / 360.0;
++  v.range_min = 0.12;
++  v.range_max = 3.5;
++  for (int i = 0; i < 360; ++i) {
++    double diff = std::fabs(std::remainder(i - open_bearing_deg, 360.0));
++    v.ranges.push_back(open_deg >= 0.0 && diff <= open_deg
++                           ? std::numeric_limits<float>::infinity()
++                           : static_cast<float>(range));
++  }
++  return v;
++}
++
++// Frontier cells across the robot's view at distance @p d, along +x.
++static std::vector<geometry_msgs::msg::Point> across(double d, int n)
++{
++  std::vector<geometry_msgs::msg::Point> points;
++  for (int i = 0; i < n; ++i) {
++    points.push_back(point(d, (i - (n - 1) / 2.0) * 0.05));
++  }
++  return points;
++}
++
++TEST(ExitDetector, frontierWithNoReturnBehindItIsOpen)
++{
++  auto e = explore::scoreFrontier(across(0.5, 9), scan(1.0, 0.0, 30.0));
++  EXPECT_EQ(e.no_return, 9);
++  EXPECT_EQ(explore::judge(e, ExitThresholds()), ExitVerdict::OPEN);
++}
++
++TEST(ExitDetector, frontierWithWallBehindItIsEnclosed)
++{
++  auto e = explore::scoreFrontier(across(0.5, 9), scan(1.0));
++  EXPECT_EQ(e.no_return, 0);
++  EXPECT_EQ(e.returned, 9);
++  EXPECT_EQ(explore::judge(e, ExitThresholds()), ExitVerdict::ENCLOSED);
++}
++
++TEST(ExitDetector, frontierBehindAWallTellsNothing)
++{
++  auto e = explore::scoreFrontier(across(0.5, 9), scan(0.3));
++  EXPECT_EQ(e.no_return + e.returned, 0);
++  EXPECT_EQ(explore::judge(e, ExitThresholds()), ExitVerdict::UNKNOWN);
++}
++
++TEST(ExitDetector, frontierOutOfRangeTellsNothing)
++{
++  auto e = explore::scoreFrontier(across(4.0, 9), scan(1.0, 0.0, 30.0));
++  EXPECT_EQ(e.points, 9);
++  EXPECT_EQ(e.no_return, 0);
++  EXPECT_EQ(explore::judge(e, ExitThresholds()), ExitVerdict::UNKNOWN);
++}
++
++TEST(ExitDetector, usesTheSensorHeading)
++{
++  // facing +y: scan ray 0 points along map +y
++  std::vector<geometry_msgs::msg::Point> ahead;
++  for (int i = 0; i < 9; ++i) {
++    ahead.push_back(point((i - 4) * 0.05, 0.5));
++  }
++  auto e = explore::scoreFrontier(ahead, scan(1.0, 0.0, 30.0, M_PI / 2.0));
++  EXPECT_EQ(e.no_return, 9);
++  // the same frontier straight ahead of a robot facing +x is to its left,
++  // where the walls are
++  auto f = explore::scoreFrontier(ahead, scan(1.0, 0.0, 30.0, 0.0));
++  EXPECT_EQ(f.no_return, 0);
++}
++
++TEST(ExitDetector, partlyOpenFrontierIsNotJudged)
++{
++  // Seen at an angle through an inner opening and out of an exit beyond: only
++  // some of its points look open (a case seen in a recorded run).
++  auto points = across(0.5, 7);
++  auto v = scan(1.0, 0.0, 30.0);
++  // the first three points have a wall behind them
++  for (int i = 0; i < 3; ++i) {
++    points[i].x = 0.5;
++    points[i].y = -0.5 - 0.05 * i;  // about -45 deg, where the walls are
++  }
++  auto e = explore::scoreFrontier(points, v);
++  EXPECT_EQ(e.no_return, 4);
++  EXPECT_EQ(explore::judge(e, ExitThresholds()), ExitVerdict::UNKNOWN);
++}
++
++TEST(ExitDetector, zeroReadingsCanMeanNoReturn)
++{
++  auto v = scan(0.0);
++  EXPECT_EQ(explore::scoreFrontier(across(0.5, 9), v).no_return, 0);
++  v.short_is_no_return = true;
++  EXPECT_EQ(explore::scoreFrontier(across(0.5, 9), v).no_return, 9);
++}
++
++TEST(FrontierMemory, exitIsConfirmedFromASecondPosition)
++{
++  FrontierMemory memory(0.3);
++  auto f = frontier(1.0, 1.4, 0.0);
++  auto seen = memory.observe(f, {f}, ExitVerdict::OPEN, point(0.0, 0.0), 0.3, 2);
++  EXPECT_EQ(seen.before, FrontierMemory::State::OPEN);
++  EXPECT_EQ(seen.after, FrontierMemory::State::EXIT_CANDIDATE);
++  // turning on the spot is not a second look
++  memory.observe(f, {f}, ExitVerdict::OPEN, point(0.1, 0.0), 0.3, 2);
++  EXPECT_EQ(memory.state(f), FrontierMemory::State::EXIT_CANDIDATE);
++  seen = memory.observe(f, {f}, ExitVerdict::OPEN, point(0.4, 0.0), 0.3, 2);
++  EXPECT_EQ(seen.after, FrontierMemory::State::EXIT);
++  EXPECT_EQ(memory.entries()[seen.index].exit_views.size(), 2u);
++}
++
++TEST(FrontierMemory, wallsBehindACandidateReopenIt)
++{
++  FrontierMemory memory(0.3);
++  auto f = frontier(1.0, 1.4, 0.0);
++  memory.observe(f, {f}, ExitVerdict::OPEN, point(0.0, 0.0), 0.3, 2);
++  auto seen = memory.observe(f, {f}, ExitVerdict::ENCLOSED, point(0.5, 0.5), 0.3, 2);
++  EXPECT_EQ(seen.after, FrontierMemory::State::OPEN);
++  // its earlier look no longer counts towards confirming it
++  memory.observe(f, {f}, ExitVerdict::OPEN, point(0.5, 0.5), 0.3, 2);
++  EXPECT_EQ(memory.state(f), FrontierMemory::State::EXIT_CANDIDATE);
++}
++
++TEST(FrontierMemory, unjudgedFrontiersAreNotRemembered)
++{
++  FrontierMemory memory(0.3);
++  auto a = frontier(1.0, 1.4, 0.0);
++  auto b = frontier(1.0, 1.4, 1.0);
++  memory.observe(a, {a}, ExitVerdict::ENCLOSED, point(0, 0), 0.3, 2);
++  memory.observe(b, {b}, ExitVerdict::UNKNOWN, point(0, 0), 0.3, 2);
++  EXPECT_TRUE(memory.entries().empty());
++}
++
++TEST(FrontierMemory, headingForACandidateKeepsItACandidate)
++{
++  FrontierMemory memory(0.3);
++  auto f = frontier(1.0, 1.4, 0.0);
++  memory.observe(f, {f}, ExitVerdict::OPEN, point(0.0, 0.0), 0.3, 2);
++  memory.recordAttempt(f);
++  EXPECT_EQ(memory.state(f), FrontierMemory::State::EXIT_CANDIDATE);
++}
++
++TEST(FrontierMemory, lidarCanTurnGivenUpFrontiersIntoExits)
++{
++  FrontierMemory memory(0.3);
++  auto postponed = frontier(1.0, 1.4, 0.0);
++  auto abandoned = frontier(1.0, 1.4, 1.0);
++  memory.set(memory.recordAttempt(postponed), FrontierMemory::State::POSTPONED,
++             postponed.centroid);
++  memory.set(memory.recordAttempt(abandoned), FrontierMemory::State::ABANDONED,
++             abandoned.centroid);
++  memory.observe(postponed, {postponed}, ExitVerdict::OPEN, point(0.0, 0.0), 0.3, 2);
++  memory.observe(abandoned, {abandoned}, ExitVerdict::OPEN, point(0.0, 0.0), 0.3, 2);
++  EXPECT_EQ(memory.state(postponed), FrontierMemory::State::EXIT_CANDIDATE);
++  EXPECT_EQ(memory.state(abandoned), FrontierMemory::State::ABANDONED);
++  memory.observe(abandoned, {abandoned}, ExitVerdict::OPEN, point(0.5, 0.0), 0.3, 2);
++  EXPECT_EQ(memory.state(abandoned), FrontierMemory::State::EXIT);
++}
++
++// Seen in simulation: a neighbouring frontier's look was recorded on an exit's
++// entry, and giving up on that neighbour then moved the exit away.
++TEST(FrontierMemory, neighbourCannotTakeOverAnExit)
++{
++  FrontierMemory memory(0.3);
++  std::vector<frontier_exploration::Frontier> both{frontier(1.0, 1.4, 0.0),
++                                                   frontier(1.0, 1.4, 0.25)};
++  const auto& exit = both[0];
++  const auto& neighbour = both[1];
++  memory.observe(exit, both, ExitVerdict::OPEN, point(0.0, 0.0), 0.3, 1);
++  ASSERT_EQ(memory.state(exit), FrontierMemory::State::EXIT);
++  // walls behind the neighbour say nothing about the exit
++  auto seen = memory.observe(neighbour, both, ExitVerdict::ENCLOSED, point(0.5, 0.5), 0.3, 1);
++  EXPECT_EQ(seen.index, memory.entries().size());
++  // its own look open to the outside gets its own entry
++  seen = memory.observe(neighbour, both, ExitVerdict::OPEN, point(0.5, 0.5), 0.3, 2);
++  EXPECT_EQ(memory.entries().size(), 2u);
++  EXPECT_EQ(memory.entries()[0].exit_views.size(), 1u);
++  EXPECT_EQ(memory.entries()[0].point.y, exit.centroid.y);
++}
++
++TEST(FrontierMemory, distantFrontierDoesNotAdoptAnEntry)
++{
++  FrontierMemory memory(0.3);
++  auto stale = frontier(1.0, 1.24, -0.88);
++  memory.recordAttempt(stale);
++  // within the match radius of the entry by its cells, not by its centre
++  auto other = frontier(0.75, 0.95, -1.05);
++  ASSERT_TRUE(FrontierMemory::matches(other, memory.entries()[0].point, 0.3));
++  memory.observe(other, {other}, ExitVerdict::OPEN, point(0.0, -1.0), 0.3, 2);
++  EXPECT_EQ(memory.entries().size(), 2u);
++  EXPECT_TRUE(memory.entries()[0].exit_views.empty());
++}
++
++TEST(FrontierMemory, exitsStayPut)
++{
++  FrontierMemory memory(0.3);
++  auto f = frontier(1.0, 1.4, 0.0);
++  auto seen = memory.observe(f, {f}, ExitVerdict::OPEN, point(0.0, 0.0), 0.3, 1);
++  memory.set(seen.index, FrontierMemory::State::POSTPONED, point(1.3, -0.4));
++  memory.track(seen.index, point(1.3, -0.4));
++  EXPECT_EQ(memory.state(f), FrontierMemory::State::EXIT);
++  EXPECT_EQ(memory.entries()[seen.index].point.x, f.centroid.x);
++}
++
++TEST(FrontierMemory, bigMoveDropsLidarLooks)
++{
++  FrontierMemory memory(0.3);
++  auto f = frontier(1.0, 1.4, 0.0);
++  auto seen = memory.observe(f, {f}, ExitVerdict::OPEN, point(0.0, 0.0), 0.3, 2);
++  memory.track(seen.index, point(1.25, 0.05));  // drifting with the map: kept
++  EXPECT_EQ(memory.entries()[seen.index].exit_views.size(), 1u);
++  memory.set(seen.index, FrontierMemory::State::POSTPONED, point(1.3, -0.5));
++  EXPECT_TRUE(memory.entries()[seen.index].exit_views.empty());
++}
++
++// ---------------------------------------------------------------- exit watch
++#include <explore/exit_watch.h>
++
++using explore::ExitWatch;
++
++TEST(ExitWatch, quietAreaNearAFrontierIsAnExit)
++{
++  ExitWatch watch(0.4, 6.0, 8);
++  auto c = point(1.0, 0.0);
++  EXPECT_FALSE(watch.update(0.0, 0.3, c, 150));
++  EXPECT_FALSE(watch.update(3.0, 0.3, c, 147));  // a few cells: not growth
++  EXPECT_FALSE(watch.update(5.9, 0.3, c, 147));
++  EXPECT_TRUE(watch.update(6.0, 0.3, c, 146));
++}
++
++TEST(ExitWatch, growingMapRestartsTheTimer)
++{
++  ExitWatch watch(0.4, 6.0, 8);
++  auto c = point(1.0, 0.0);
++  watch.update(0.0, 0.3, c, 150);
++  EXPECT_FALSE(watch.update(4.0, 0.3, c, 120));  // the lidar mapped 30 cells
++  EXPECT_FALSE(watch.update(9.0, 0.3, c, 118));
++  EXPECT_TRUE(watch.update(10.0, 0.3, c, 118));
++}
++
++TEST(ExitWatch, onlyWatchesFromNearby)
++{
++  ExitWatch watch(0.4, 6.0, 8);
++  auto c = point(1.0, 0.0);
++  EXPECT_FALSE(watch.update(0.0, 0.8, c, 150));
++  EXPECT_FALSE(watch.watching());
++  watch.update(1.0, 0.3, c, 150);
++  // backing away restarts the timer once the robot is near again
++  EXPECT_FALSE(watch.update(5.0, 0.6, c, 150));
++  EXPECT_FALSE(watch.update(6.0, 0.3, c, 150));
++  EXPECT_FALSE(watch.update(11.0, 0.3, c, 150));
++  EXPECT_TRUE(watch.update(12.0, 0.3, c, 150));
++}
++
++TEST(ExitWatch, countsAroundWhereTheFrontierWasWhenWatchingBegan)
++{
++  ExitWatch watch(0.4, 6.0, 8);
++  watch.update(0.0, 0.3, point(1.0, 0.0), 150);
++  watch.update(1.0, 0.3, point(1.3, 0.0), 150);
++  EXPECT_DOUBLE_EQ(watch.center().x, 1.0);
++}
++
+ int main(int argc, char** argv)
+ {
+   testing::InitGoogleTest(&argc, argv);
+diff --git a/explore_lite_msgs/CMakeLists.txt b/explore_lite_msgs/CMakeLists.txt
+index e71154a..e03b644 100644
+--- a/explore_lite_msgs/CMakeLists.txt
++++ b/explore_lite_msgs/CMakeLists.txt
+@@ -3,9 +3,14 @@ project(explore_lite_msgs)
+ 
+ find_package(ament_cmake REQUIRED)
+ find_package(rosidl_default_generators REQUIRED)
++find_package(geometry_msgs REQUIRED)
++find_package(std_msgs REQUIRED)
+ 
+ rosidl_generate_interfaces(${PROJECT_NAME}
+   "msg/ExploreStatus.msg"
++  "msg/Frontier.msg"
++  "msg/FrontierArray.msg"
++  DEPENDENCIES geometry_msgs std_msgs
+ )
+ 
+ ament_export_dependencies(rosidl_default_runtime)
+diff --git a/explore_lite_msgs/msg/Frontier.msg b/explore_lite_msgs/msg/Frontier.msg
+new file mode 100644
+index 0000000..e696159
+--- /dev/null
++++ b/explore_lite_msgs/msg/Frontier.msg
+@@ -0,0 +1,22 @@
++# One frontier found by explore_lite: an edge between explored free space and
++# unexplored space, with what explore_lite has concluded about it.
++
++# state values
++uint8 OPEN=0            # may be chosen as a goal
++uint8 EXIT_CANDIDATE=1  # the lidar saw no return through it once: probably a maze exit; still a goal
++uint8 EXIT=2            # a maze exit (seen open from two positions, or the map stayed
++                        # unexplored there while the robot was near); never a goal
++uint8 POSTPONED=3       # given up for now; retried once no open frontier is left
++uint8 ABANDONED=4       # given up too often; never a goal again
++
++geometry_msgs/Point centroid
++geometry_msgs/Point[] points
++uint8 state
++float64 cost              # explore_lite's cost (lower is chosen first)
++float64 path_distance     # m from the robot to the frontier, around walls
++# Share of its points that the latest lidar scan looked through without any
++# return (nothing within range behind them). -1 if no scan could be used.
++float32 no_return_ratio
++uint32 exit_views         # robot positions from which the lidar saw it as open to the outside
++uint32 attempts           # times the robot has set out for it
++bool goal                 # the robot is heading for it now
+diff --git a/explore_lite_msgs/msg/FrontierArray.msg b/explore_lite_msgs/msg/FrontierArray.msg
+new file mode 100644
+index 0000000..f2b8830
+--- /dev/null
++++ b/explore_lite_msgs/msg/FrontierArray.msg
+@@ -0,0 +1,2 @@
++std_msgs/Header header
++Frontier[] frontiers
+diff --git a/explore_lite_msgs/package.xml b/explore_lite_msgs/package.xml
+index 521e26e..2b862a2 100644
+--- a/explore_lite_msgs/package.xml
++++ b/explore_lite_msgs/package.xml
+@@ -11,6 +11,9 @@
+   <buildtool_depend>ament_cmake</buildtool_depend>
+   <buildtool_depend>rosidl_default_generators</buildtool_depend>
+ 
++  <depend>geometry_msgs</depend>
++  <depend>std_msgs</depend>
++
+   <exec_depend>rosidl_default_runtime</exec_depend>
+   <member_of_group>rosidl_interface_packages</member_of_group>
+ 
