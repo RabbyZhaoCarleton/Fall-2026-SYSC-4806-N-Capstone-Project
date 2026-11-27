@@ -67,7 +67,15 @@ slam_toolbox:
     # Correlation Parameters - Correlation Parameters
     correlation_search_space_dimension: 0.5
     correlation_search_space_resolution: 0.01
-    correlation_search_space_smear_deviation: 0.1
+    # maze: 0.1. The smear blurs the map before each scan is matched; at 0.1 m
+    # every offset within a few cm scored almost the same, so SLAM's pose
+    # random-walked in ~1 cm / 0.4° steps away from a near-perfect EKF (up to
+    # 63 cm and 22° on a long run). Re-running 4 recorded runs (tools/slam_sweep.py,
+    # 2 scan offsets each) gave mean/avg-max error vs ground truth:
+    #   0.1:  EKF 8.5 / 19.4 cm, wheels-only 8.7 / 17.0 cm
+    #   0.03: EKF 2.3 /  5.2 cm, wheels-only 2.8 /  5.6 cm
+    #   0.02: EKF 2.1 /  4.5 cm, wheels-only 1.9 /  3.9 cm  (wheel odometry alone: up to 69 cm)
+    correlation_search_space_smear_deviation: 0.02
 
     # Correlation Parameters - Loop Closure Parameters
     loop_search_space_dimension: 8.0
