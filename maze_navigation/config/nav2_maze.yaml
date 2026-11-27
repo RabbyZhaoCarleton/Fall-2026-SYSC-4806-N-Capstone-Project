@@ -130,7 +130,12 @@ controller_server:
       rotate_to_heading_angular_vel: 1.0  # rad/s; same as max_vel_theta
       max_angular_accel: 1.0              # rad/s^2; same slip limit as below
       simulate_ahead_time: 1.0
-      rotate_to_goal_heading: false
+      # Once the robot is within xy_goal_tolerance, the shim turns it to the
+      # goal's heading itself. With false, DWB's RotateToGoal turned toward the
+      # goal heading (explore_lite always sends yaw 0) while the shim turned back
+      # toward the path whenever that was >45° off; the robot swung between the
+      # two for 27 s until the progress checker aborted (run 2026-11-27_08-19-55).
+      rotate_to_goal_heading: true
       # DWB (the primary controller) parameters
       debug_trajectory_details: true
       min_vel_x: 0.0
@@ -201,8 +206,12 @@ local_costmap:
       plugins: ["obstacle_layer", "voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.2
-        cost_scaling_factor: 5.0
+        # Corridors are 0.5 m (0.24 m from a wall to the centre line). Inflating
+        # to the centre with a gentle falloff makes paths follow the middle of a
+        # corridor and stay off wall ends; with 0.2 / 5.0 paths hugged corners and
+        # DWB found no forward move there (rotate-in-place stalls, 2026-11-27).
+        inflation_radius: 0.25
+        cost_scaling_factor: 3.0
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
@@ -292,8 +301,12 @@ global_costmap:
         transform_tolerance: 0.1
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.2
-        cost_scaling_factor: 5.0
+        # Corridors are 0.5 m (0.24 m from a wall to the centre line). Inflating
+        # to the centre with a gentle falloff makes paths follow the middle of a
+        # corridor and stay off wall ends; with 0.2 / 5.0 paths hugged corners and
+        # DWB found no forward move there (rotate-in-place stalls, 2026-11-27).
+        inflation_radius: 0.25
+        cost_scaling_factor: 3.0
       always_send_full_costmap: true
 
 map_server:

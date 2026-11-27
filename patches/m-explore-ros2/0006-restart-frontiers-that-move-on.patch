@@ -1,0 +1,56 @@
+diff --git a/explore/include/explore/frontier_memory.h b/explore/include/explore/frontier_memory.h
+index 34c4efd..29468d7 100644
+--- a/explore/include/explore/frontier_memory.h
++++ b/explore/include/explore/frontier_memory.h
+@@ -256,6 +256,25 @@ public:
+     entry.point = point;
+   }
+ 
++  /**
++   * @brief Start a frontier afresh at @p point: open, with no attempts counted.
++   *
++   * For a frontier that moved on as the robot reached it (the map grew and the
++   * unknown edge is now further along, for example through a doorway). The
++   * attempts so far were at where it used to be, not at where it is now. A maze
++   * exit is left as it is.
++   */
++  void restart(std::size_t index, const geometry_msgs::msg::Point& point)
++  {
++    Entry& entry = entries_.at(index);
++    if (entry.state == State::EXIT) {
++      return;
++    }
++    entry.state = State::OPEN;
++    entry.attempts = 0;
++    track(index, point);
++  }
++
+   /** @brief Re-open every postponed frontier. @return how many were re-opened. */
+   std::size_t reopenPostponed()
+   {
+diff --git a/explore/src/explore.cpp b/explore/src/explore.cpp
+index 76d0cf1..ff9d695 100644
+--- a/explore/src/explore.cpp
++++ b/explore/src/explore.cpp
+@@ -442,7 +442,20 @@ bool Explore::continueCommitment(
+     }
+     settling_ = false;
+     committed_ = false;
+-    if (current && current->min_distance > exit_reach_distance_) {
++    if (current && current->min_distance > exit_reach_distance_ &&
++        FrontierMemory::distance(current->centroid, committed_goal_) >
++            memory_.matchRadius()) {
++      // The robot got to where the frontier was, and the map grew: the frontier
++      // is now further on (through a doorway, round a corner). That is progress,
++      // not a failed attempt; counting it would abandon the new frontier after
++      // max_frontier_attempts without ever trying it.
++      memory_.restart(committed_entry_, current->centroid);
++      RCLCPP_INFO(logger_,
++                  "Frontier at (%.2f, %.2f) moved on to (%.2f, %.2f) as the robot "
++                  "reached it; treating it as a new frontier",
++                  committed_goal_.x, committed_goal_.y, current->centroid.x,
++                  current->centroid.y);
++    } else if (current && current->min_distance > exit_reach_distance_) {
+       // Nav2 can report success without reaching the frontier: when the goal
+       // itself cannot be planned to, its planner settles for a reachable point
+       // nearby, which may be on the other side of a wall. min_distance is
