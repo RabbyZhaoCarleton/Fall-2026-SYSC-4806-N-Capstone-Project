@@ -9,15 +9,27 @@ import sys
 def parse_args(argv):
     p = argparse.ArgumentParser(
         prog='maze_monitor',
-        description='Debugging and test monitor for the maze robot. Shows live data, records '
-                    'each run, and replays saved runs.')
+        description='Run manager and debugging monitor for the maze robot. Starts, stops, and '
+                    'restarts simulation runs with the settings you choose, records each run, '
+                    'shows live data, and replays saved runs.')
     p.add_argument('--replay', metavar='RUN',
                    help='open a saved run: a run folder, a folder name in the runs directory, '
                         'or "latest"')
     p.add_argument('--no-ros', action='store_true',
                    help='do not connect to ROS 2 (replay only)')
+    p.add_argument('--start', action='store_true',
+                   help='start a simulation run at once, with the last used settings '
+                        '(or the --preset)')
+    p.add_argument('--preset', metavar='NAME',
+                   help='fill in the Run panel from this saved preset')
+    p.add_argument('--record', action='store_true',
+                   help='record the live data at once, for a system started some other way '
+                        '(the real robot, or a launch in a terminal)')
     p.add_argument('--no-record', action='store_true',
-                   help='show live data without saving a run')
+                   help='with --attach: show live data without saving a run')
+    p.add_argument('--attach', action='store_true',
+                   help='set by maze.launch.py: record the run that launch started; the Run '
+                        'panel then cannot start or stop runs')
     p.add_argument('--label', default='',
                    help='short label added to the run folder name, for example "explore"')
     p.add_argument('--launch-args', default='{}',
@@ -61,15 +73,20 @@ def main(argv=None):
             bridge = None
 
     from .gui.main_window import MainWindow, Options
-    window = MainWindow(config, Options(live=bridge is not None, record=not args.no_record,
+    record = (args.attach or args.record) and not args.no_record
+    window = MainWindow(config, Options(live=bridge is not None, record=record,
                                         label=args.label, launch_args=launch_args,
-                                        replay=args.replay), bridge)
+                                        replay=args.replay, attached=args.attach,
+                                        start=args.start, preset=args.preset), bridge)
     window.show()
 
     # Ctrl+C in the terminal or a launch shutdown: close the window cleanly so the
-    # recording is finalized. Qt only lets Python handle signals while Python code
-    # runs; the window's 50 ms timer provides that.
+    # recording is finalized and a simulation started from the monitor is stopped
+    # (it runs in its own process group, so the Ctrl+C does not reach it). Qt only
+    # lets Python handle signals while Python code runs; the window's 50 ms timer
+    # provides that.
     def on_signal(signum, _frame):
+        window.quit_without_asking = True
         QTimer.singleShot(0, window.close)
     signal.signal(signal.SIGINT, on_signal)
     signal.signal(signal.SIGTERM, on_signal)

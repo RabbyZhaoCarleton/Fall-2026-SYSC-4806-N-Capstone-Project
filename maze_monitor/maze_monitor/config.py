@@ -43,6 +43,27 @@ DEFAULTS = {
         'slow_rtf': 0.5,
         'exploration_stall': 60.0,
     },
+    'launch': {
+        'stop_timeout': 20.0,
+        'term_timeout': 5.0,
+    },
+    'control': {
+        'explore_resume_topic': '/explore/resume',
+        'explore_node': 'explore_node',
+        'nav2_node': 'bt_navigator',
+        'slam_node': 'slam_toolbox',
+        'navigation_cancel_service': '/navigate_to_pose/_action/cancel_goal',
+    },
+    'teleop': {
+        'topic': '/cmd_vel',
+        'stamped': True,
+        'frame_id': 'base_link',
+        'rate_hz': 20.0,
+        'linear_speed': 0.15,
+        'angular_speed': 1.2,
+        'max_linear_speed': 0.22,
+        'max_angular_speed': 2.84,
+    },
     'hidden_topics': [
         '/clock', '/joint_states', '/robot_description', '/tf_static',
         r'.*/published_footprint', r'.*/footprint', r'.*/transition_event',
@@ -73,6 +94,9 @@ class Config:
     robot_radius: float
     thresholds: dict
     hidden_patterns: list
+    launch: dict = field(default_factory=dict)
+    control: dict = field(default_factory=dict)
+    teleop: dict = field(default_factory=dict)
     raw: dict = field(repr=False, default_factory=dict)
 
     @classmethod
@@ -93,6 +117,9 @@ class Config:
             robot_radius=float(data['robot']['radius']),
             thresholds=dict(data['thresholds']),
             hidden_patterns=_patterns(data['hidden_topics']),
+            launch=dict(data['launch']),
+            control=dict(data['control']),
+            teleop=dict(data['teleop']),
             raw=data,
         )
 

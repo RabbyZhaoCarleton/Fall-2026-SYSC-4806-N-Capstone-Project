@@ -9,7 +9,13 @@ For instructions on using the monitor, see the [user manual](user-manual.md).
 The monitor helps you understand what the robot is doing and why something
 went wrong, without reading streams of raw numbers. It must do the following:
 
-*   Start together with the maze simulation and show live data.
+*   Manage simulation runs: start, stop, and restart the simulation with
+    settings chosen in the window (launch arguments, single parameters, and
+    presets), so nobody has to type launch commands while testing.
+*   Let you pause and resume exploration and drive the robot with the
+    keyboard.
+*   Show live data, and still work when the simulation is started from a
+    terminal.
 *   Offer a **Raw** view with the unprocessed values and an **Analysis** view
     that turns those values into plain-language findings and pictures.
 *   Let you show or hide each ROS 2 topic.
@@ -22,7 +28,12 @@ went wrong, without reading streams of raw numbers. It must do the following:
 
 ### Non-goals
 
-*   Controlling the robot. The monitor only listens; it never publishes.
+*   Steering the robot's behavior. The monitor publishes only what you ask
+    for with the robot controls: pause and resume for explore_lite, a cancel
+    for Nav2 goals, and keyboard speed commands. It never sends goals of its
+    own.
+*   Replacing `ros2 launch`. The monitor runs `maze.launch.py` as it is; the
+    launch file stays the single description of a simulation run.
 *   Replacing RViz. The monitor draws a simple 2D map for context, not a 3D
     scene.
 *   Replacing `ros2 bag`. Runs are standard rosbag2 recordings, so the
@@ -86,7 +97,12 @@ maze_monitor/
 ├── maze_monitor/
 │   ├── main.py            Entry point, command-line options, shutdown handling
 │   ├── config.py          Thresholds and recording rules, with YAML overrides
-│   ├── ros_bridge.py      rclpy node: discovery, QoS matching, subscriptions
+│   ├── launcher.py        Starts and stops ros2 launch as a process group
+│   ├── run_settings.py    Settings of a run, its launch command, presets
+│   ├── param_files.py     Parameter files: defaults, overrides, per-run copies
+│   ├── teleop.py          Held keys to a speed command
+│   ├── ros_bridge.py      rclpy node: discovery, QoS matching, subscriptions,
+│   │                      robot control publishers
 │   ├── clock.py           Steady receive clock (see RosBridge)
 │   ├── recorder.py        rosbag2 writer and reader for runs
 │   ├── run_store.py       Run folders, metadata, listing, export, deletion
@@ -98,14 +114,18 @@ maze_monitor/
 │   │   ├── geometry.py    Angles, quaternions, 2D poses
 │   │   └── diagnosis.py   Builds the plain-language status from a snapshot
 │   └── gui/
-│       ├── main_window.py Window layout, modes, menus, shortcuts
+│       ├── main_window.py Window layout, run control, modes, menus, shortcuts
+│       ├── run_panel.py   Run settings form, Start, Stop, Restart, presets
+│       ├── params_dialog.py Parameter editor
+│       ├── robot_control.py Exploration buttons, keyboard driving
+│       ├── launch_log.py  Launch output panel
 │       ├── topics_panel.py Topic list with show and hide check boxes
 │       ├── raw_view.py    Raw view
 │       ├── analysis_view.py Analysis view (cards)
 │       ├── widgets.py     Heading dial, lidar view, map view, plots, bars
 │       ├── transport.py   Timeline bar and playback controls
 │       ├── events_panel.py Event list
-│       ├── run_manager.py Run management dialog
+│       ├── run_manager.py Saved runs dialog
 │       └── style.py       The color palette and its meaning
 ├── config/monitor.yaml    Default settings
 ├── docs/                  This document and the user manual
@@ -393,19 +413,95 @@ Playback advances the cursor by elapsed wall time multiplied by the speed.
 Seeking is instant, because every lookup is a binary search on the sorted
 times of a track or series.
 
+### Run control
+
+The monitor is a long-lived process; simulation runs come and go under it.
+
+**Starting.** `RunSettings` (`run_settings.py`) holds what the Run panel shows
+and turns it into one command:
+`ros2 launch maze_sim maze.launch.py name:=value … monitor:=false`. The
+monitor then does the following, in order:
+
+1.  It looks for leftover Gazebo servers and `maze_sim` launches and offers to
+    stop them, because `maze.launch.py` refuses to start next to a Gazebo
+    server.
+2.  It creates the run folder and saves the settings, the command, and the
+    launch arguments in `run.json`.
+3.  It writes the parameter files of the run into `params/`
+    (`param_files.py`): a copy with the overrides applied for each file with
+    changes, and a plain copy of the others. The command names only the
+    changed copies and files the user chose, so it stays short and the
+    defaults still come from the launch file.
+4.  It starts recording, then starts the launch (`launcher.py`).
+
+`monitor:=false` keeps the launch from opening a second monitor. A launch
+started from a terminal passes `--attach` to the monitor it opens; that
+monitor records the run and disables Start and Stop.
+
+**Why a subprocess instead of the launch API in-process:** `ros2 launch` runs
+its own asyncio loop and signal handling and expects to own the process. A
+child process keeps a crashing launch from taking the monitor with it, behaves
+exactly like the command a developer types, and lets the monitor show and save
+its output.
+
+**Process group.** The launch starts in a new session, so it and everything it
+starts (Gazebo, SLAM, Nav2, RViz) share one process group, and a Ctrl+C in
+the monitor's terminal does not reach them directly. Stopping sends SIGINT to
+the whole group, which is what Ctrl+C in a terminal does, so the launch shuts
+its nodes down in its usual order. If the group is still alive after
+`launch.stop_timeout` (20 s), it gets SIGTERM, and after `term_timeout` (5 s)
+more, SIGKILL. The GUI timer polls the state; nothing blocks the window.
+
+**Ending.** A run ends when the whole process group is gone. If the launch
+exits by itself but leaves processes behind (a Gazebo server after a crash),
+the monitor stops the rest of the group the same way, so the next start finds
+nothing left over. It then stops the recording and saves in `run.json` how the
+run ended (`ended_by`, `launch_exit_code`). A launch that exits with an error
+within 15 s is marked `launch failed`. **Restart** waits for this before it
+starts the next run.
+
+**Output.** A reader thread reads the launch output, strips terminal colors,
+writes it to `launch.log` in the run folder, and queues it for the **Launch
+output** panel.
+
+**Exploration.** Pause and resume publish `std_msgs/Bool` on
+`/explore/resume`, which explore_lite handles: pausing cancels its Nav2 goal.
+The state shown comes from the analyzer's `explore.status` series
+(`/explore/status`) and from node discovery (`explore_node`, `bt_navigator`).
+**Start exploring** runs `ros2 run explore_lite explore` with the run's
+exploration parameters in a second process group, which ends with the run.
+
+**Keyboard driving.** `KeyboardDriver` installs an application-wide event
+filter while driving is on. It accepts the `ShortcutOverride` event of the
+driving keys, so that the arrow keys and Space drive instead of triggering the
+timeline shortcuts, and leaves keys alone while a text box has the focus. It
+publishes `geometry_msgs/TwistStamped` on `/cmd_vel` at `teleop.rate_hz`
+while a key is held, then three zero commands. It sends zero when the window
+loses the focus. By default, starting to drive pauses explore_lite and
+cancels all Nav2 goals (`/navigate_to_pose/_action/cancel_goal`), so that Nav2
+and the keys don't both command the robot.
+
+The monitor subscribes to its own control topics like any other, so a
+recording contains the commands it sent.
+
 ### Shutdown
 
 The monitor handles `SIGINT` and `SIGTERM`, which the launch system sends when
-you press Ctrl+C. It stops the ROS thread, closes the recording, and writes the
-final summary. If the process dies before that, the recording is still
-readable (see [Recorder](#recorder)).
+you press Ctrl+C. It stops a simulation that it started (see [Run
+control](#run-control)) and waits for it, then stops the ROS thread, closes the
+recording, and writes the final summary. Closing the window asks first and
+does the same without blocking the window. If the process dies before that,
+the recording is still readable (see [Recorder](#recorder)).
 
 ## Integration with the simulation
 
-`maze_sim/launch/maze.launch.py` starts the monitor when the `monitor` launch
-argument is `true`, which is the default. The launch file passes a label that
-describes the launch mode (`explore`, `nav`, or `manual`) and the launch
-arguments, which the monitor saves in `run.json`.
+The monitor starts `maze_sim/launch/maze.launch.py` for each run (see [Run
+control](#run-control)).
+
+The launch file also starts a monitor when the `monitor` launch argument is
+`true`, which is the default, for runs started from a terminal. It passes
+`--attach`, a label that describes the launch mode (`explore`, `nav`, or
+`manual`), and the launch arguments, which the monitor saves in `run.json`.
 
 The `maze_sim` package declares `maze_monitor` as a dependency, so
 `setup.sh` and the CI build include it.
@@ -427,7 +523,12 @@ The `maze_sim` package declares `maze_monitor` as a dependency, so
 
 The unit tests in `test/` cover the timeline lookups, the geometry helpers,
 each detector with synthetic messages, the run store, and recording and
-reading back a run, including a recording whose process was killed. They run
+reading back a run, including a recording whose process was killed. For run
+control, they cover starting and stopping process groups with stand-in
+programs (Ctrl+C reaching children, escalation to SIGKILL, cleanup when the
+leader exits by itself, finding leftovers), the launch command for each set
+of settings, presets, parameter overrides and their type checks, and the
+keyboard speed command. They run
 without a ROS graph:
 
 ```bash

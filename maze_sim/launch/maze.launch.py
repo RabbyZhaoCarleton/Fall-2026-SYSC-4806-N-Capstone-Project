@@ -212,7 +212,12 @@ MONITORED_ARGS = ('world', 'x_pose', 'y_pose', 'use_sim_time', 'slam', 'rviz', '
 
 
 def start_monitor(context):
-    """Start the maze_monitor GUI, labelled with the launch mode, if monitor is true."""
+    """Start the maze_monitor GUI, labelled with the launch mode, if monitor is true.
+
+    --attach makes the monitor record this one run. To start, stop and restart
+    runs from the monitor instead, run it on its own (ros2 run maze_monitor
+    maze_monitor); it then starts this launch file with monitor:=false.
+    """
     if not is_true(LaunchConfiguration('monitor').perform(context)):
         return []
     values = {name: LaunchConfiguration(name).perform(context) for name in MONITORED_ARGS}
@@ -222,7 +227,7 @@ def start_monitor(context):
         label = 'nav'
     else:
         label = 'manual'
-    arguments = ['--label', label, '--launch-args', json.dumps(values)]
+    arguments = ['--attach', '--label', label, '--launch-args', json.dumps(values)]
     if not is_true(LaunchConfiguration('monitor_record').perform(context)):
         arguments.append('--no-record')
     return [Node(

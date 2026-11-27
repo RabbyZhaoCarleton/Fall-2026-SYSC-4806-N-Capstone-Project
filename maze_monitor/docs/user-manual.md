@@ -1,13 +1,16 @@
 # Maze monitor user manual
 
-The maze monitor shows what the robot is doing while it runs, records every
-run, and lets you replay a run to find out why something went wrong. Use it
-when the robot runs into a wall, can't find a path, gets stuck, or behaves in
-a way you don't understand.
+The maze monitor is the place to run and debug the simulation. It starts,
+stops, and restarts simulation runs with the settings you pick, so you don't
+have to type launch commands. While a run goes, it shows what the robot is
+doing, lets you pause or resume exploration and drive the robot with the
+keyboard, and records the run. Afterward you can replay a run to find out why
+something went wrong: the robot ran into a wall, couldn't find a path, got
+stuck, or did something you don't understand.
 
-This manual explains how to start the monitor, read its views, replay and
-manage runs, and investigate common problems. For how the monitor works
-inside, see the [design document](design.md).
+This manual explains how to start runs, control the robot, read the views,
+replay and manage runs, and investigate common problems. For how the monitor
+works inside, see the [design document](design.md).
 
 ## Before you begin
 
@@ -17,34 +20,22 @@ installation.
 
 ## Start the monitor
 
-### With the simulation
-
-The monitor starts automatically with the simulation:
-
-```bash
-ros2 launch maze_sim maze.launch.py explore:=true gui:=false
-```
-
-The monitor window opens next to RViz and starts recording a new run.
-
-The launch file accepts two arguments for the monitor:
-
-| Argument         | Default | Meaning |
-|------------------|---------|---------|
-| `monitor`        | `true`  | Open the monitor. |
-| `monitor_record` | `true`  | Save the run to disk. Set it to `false` to watch without saving. |
-
-When you stop the launch with Ctrl+C, the monitor saves the run and closes. To
-look at the run afterward, start the monitor on its own and open the run (see
-[Replay a run](#replay-a-run)).
-
-### On its own
-
-To watch a system that is already running (for example, the real robot on the
-same network), start the monitor by itself:
+Start the monitor once and keep it open while you test:
 
 ```bash
 ros2 run maze_monitor maze_monitor
+```
+
+The monitor starts idle. You start each simulation run from its **Run** panel
+(see [Run the simulation](#run-the-simulation)). Every run is recorded as its
+own run folder, and the monitor stays open between runs.
+
+To start a run at once, with the settings you used last or with a saved
+preset:
+
+```bash
+ros2 run maze_monitor maze_monitor --start
+ros2 run maze_monitor maze_monitor --preset "explore headless" --start
 ```
 
 To look at saved runs without connecting to ROS 2, use `--no-ros`. For
@@ -58,26 +49,216 @@ The monitor accepts these options:
 
 | Option               | Meaning |
 |----------------------|---------|
+| `--start`            | Start a simulation run as soon as the window opens. |
+| `--preset NAME`      | Fill in the Run panel from a saved preset. |
+| `--record`           | Record the live data at once. Use it for a system that you start some other way, such as the real robot on the same network. |
 | `--replay RUN`       | Open a saved run. `RUN` is a run folder, a folder name in the runs directory, or `latest`. |
 | `--no-ros`           | Don't connect to ROS 2. Only replay is available. |
-| `--no-record`        | Show live data without saving a run. |
-| `--label TEXT`       | Add a label to the run folder name, for example `wall-test`. |
+| `--label TEXT`       | With `--record`: add a label to the run folder name, for example `wall-test`. |
 | `--runs-dir DIR`     | Save and look for runs in `DIR` instead of `~/maze_runs`. You can also set the `MAZE_RUNS_DIR` environment variable. |
 | `--config FILE`      | Load settings, such as thresholds, from a YAML file. See [Change thresholds](#change-thresholds). |
+
+### With a launch from a terminal
+
+You can still start the simulation from a terminal. The launch file then opens
+its own monitor, which records that one run:
+
+```bash
+ros2 launch maze_sim maze.launch.py explore:=true gui:=false
+```
+
+| Argument         | Default | Meaning |
+|------------------|---------|---------|
+| `monitor`        | `true`  | Open the monitor. |
+| `monitor_record` | `true`  | Save the run to disk. Set it to `false` to watch without saving. |
+
+This monitor can't start or stop runs (its Run panel says so), but the
+**Robot control** panel works. When you stop the launch with Ctrl+C, the
+monitor saves the run and closes.
+
+## Run the simulation
+
+The **Run** panel (left, next to **Topics**) holds the settings of the next
+run and the buttons that control it.
+
+| Button      | Keys     | Action |
+|-------------|----------|--------|
+| **Start**   | F5       | Start the simulation with the settings in the panel, and record it as a new run. |
+| **Stop**    | Shift+F5 | Stop the simulation, as Ctrl+C in a terminal would, and save the run. |
+| **Restart** | Ctrl+F5  | Stop the run and start a new one with the settings in the panel. Change a setting, press Ctrl+F5, and compare. |
+
+The same commands are in the toolbar and the **Run** menu.
+
+At the top of the panel, the state shows **Idle**, **Running** with the run
+time, **Stopping**, **Ended**, or **Failed to start**. While the run starts,
+a line shows which parts are up: **Gazebo**, **SLAM**, **Nav2**, and
+**explore_lite** turn green with a check mark once they are running. Nav2 and
+explore_lite take about 20 seconds.
+
+If you change a setting while a run is going, the panel reminds you to
+restart to apply it.
+
+### Settings
+
+| Setting | Launch argument | Meaning |
+|---------|-----------------|---------|
+| **What the robot does** | `explore`, `nav` | **Drive it yourself**: no Nav2; drive with the keyboard. **Nav2**: send goals with **2D Goal Pose** in RViz. **Explore the maze autonomously**: Nav2 and explore_lite map the maze. |
+| **Stop the run when exploration is done** | `shutdown_when_done` | Once explore_lite has brought the robot back to its start, the run stops and is saved. |
+| **Windows** | `gui`, `rviz` | Open the Gazebo window and RViz. The simulation runs without the Gazebo window, and it is faster and steadier that way under WSL. |
+| **World** | `world` | The SDF world file. Empty: the default maze. |
+| **Robot start** | `x_pose`, `y_pose` | Where the robot starts, in metres. |
+| **Save the run** | | Off: watch without recording. The launch output is still kept in `~/.cache/maze_monitor/unrecorded`. |
+| **Label** | | Added to the run folder name. Empty: the mode (`explore`, `nav`, or `manual`). |
+| **Notes** | | Saved as the run's notes, for example what you changed. |
+| **Change parameters…** | | Change single ROS parameters for the run. See [Change parameters for a run](#change-parameters-for-a-run). |
+
+Click **Advanced** for more:
+
+| Setting | Launch argument | Meaning |
+|---------|-----------------|---------|
+| **Components** | `slam`, `ekf`, `use_sim_time` | Start slam_toolbox, use the EKF (wheel odometry and IMU), and use the Gazebo clock. |
+| **SLAM file**, **Navigation file**, **Exploration file**, **EKF file** | `slam_params`, `nav_params`, `explore_params`, `ekf_params` | Use a whole parameter file of your own. Empty: the file in `maze_navigation/config`. |
+| **More arguments** | | Any other launch argument, as `name:=value`. `ros2 launch maze_sim maze.launch.py --show-args` lists them. |
+| **Command** | | The `ros2 launch` command the monitor runs. Click **Copy command** to run it in a terminal yourself. |
+
+The panel remembers your settings the next time the monitor starts.
+
+### Presets
+
+A preset is a saved set of settings, for example "explore headless" or
+"teleop in the default maze". Choose one in the **Preset** list to fill in the
+panel. To save the current settings, click **Save…**; to delete the chosen
+preset, click **Delete**. Presets are YAML files in
+`~/.config/maze_monitor/presets`, so you can share them with your group.
+
+To run a saved run again, open **Runs…**, select the run, and click **Use its
+settings**. The panel then holds that run's settings, including its changed
+parameters; click **Start**.
+
+### Change parameters for a run
+
+Click **Change parameters…** to change single parameters of SLAM, Nav2,
+explore_lite, or the EKF without editing the files in `maze_navigation`. Each
+file has a tab with one branch per node.
+
+*   Double-click a value to change it. The monitor checks the type: an integer
+    parameter takes only whole numbers, for example. Changed values appear in
+    bold, and the tab shows how many you changed.
+*   Type in the filter box to find a parameter, for example `timeout`. Select
+    **Changed only** to see your changes.
+*   To undo changes, click **Reset selected** or **Reset this file**.
+
+When the run starts, the monitor writes a copy of each changed file, with your
+changes listed at the top, into the run folder (`params/`) and starts the
+launch with that copy. The run folder also keeps an unchanged copy of each
+file the run used, so you can always see the exact parameters of a run.
+
+### What happens when a run ends
+
+A run ends when you click **Stop**, when the launch ends by itself (for
+example, with **Stop the run when exploration is done**), or when it fails.
+The monitor then saves the run, shows it as a replay, and records how it
+ended in `run.json`. If the launch fails within 15 seconds, the panel shows
+**Failed to start**, and a message shows the last lines of its output.
+
+When you stop a run, the simulation gets 20 seconds to shut down after the
+Ctrl+C. If it hasn't stopped by then, the monitor forces it to stop. You can
+change these times in the settings file (`launch.stop_timeout`).
+
+If you quit the monitor while a run is active, it asks, then stops the
+simulation and saves the run before it closes. Ctrl+C in the monitor's
+terminal does the same without asking.
+
+### Leftover simulations
+
+A Gazebo server left over from an earlier run (for example, after a crash)
+publishes its own `/clock`, `/odom` and `/scan`, and `maze.launch.py` refuses
+to start next to one. When you click **Start**, the monitor looks for leftover
+Gazebo servers and `maze_sim` launches and offers to stop them. You can also
+stop them at any time with **Run > Stop leftover simulations…**.
+
+### Launch output
+
+The **Launch output** panel (bottom) shows what the simulation prints, as the
+terminal would. Errors are red and warnings amber. Select **Errors and
+warnings only** to hide the rest. The whole output is saved as `launch.log` in
+the run folder; click **Open log file** to open it.
+
+## Control the robot
+
+The **Robot control** panel (right, above **Events**) works with any running
+simulation: one started from the Run panel, from a terminal, or the real
+robot.
+
+### Pause or resume exploration
+
+The **Exploration** box shows what explore_lite is doing: exploring, paused,
+returning to the start, or done.
+
+*   Click **Pause exploring** (or press F3) to pause explore_lite. It cancels
+    its Nav2 goal, so the robot stops at once. Click **Resume exploring** to
+    continue; explore_lite keeps the frontiers it knew.
+*   If the run has Nav2 but no explore_lite (**Nav2: send goals in RViz**),
+    click **Start exploring** to start explore_lite in the running
+    simulation. It uses the run's exploration parameters, and when it is
+    done it brings the robot back to where it was when you started it.
+    **End** stops it again; Nav2 keeps running.
+
+The monitor pauses and resumes explore_lite through the
+`/explore/resume` topic, so the same messages appear in the recording.
+
+### Drive with the keyboard
+
+Click **Drive** in the toolbar or the panel, or press F2. The toolbar then
+shows **DRIVING**, and the keys drive the robot:
+
+| Keys | Action |
+|------|--------|
+| W or Up | Forward |
+| S or Down | Back |
+| A or Left | Turn left |
+| D or Right | Turn right |
+| Shift (held) | Slower, at 40% of the speeds |
+| Space or X | Stop |
+
+Hold keys together to drive in a curve, for example W and A. The robot moves
+only while you hold a key, and it stops when you release the keys, when the
+monitor window loses the keyboard focus, and when you end driving with F2.
+Set the speeds in **Drive speed** and **Turn speed**; the TurtleBot3 Burger
+can't go faster than 0.22 m/s or turn faster than 163 °/s.
+
+While you drive, the arrow keys and Space drive the robot instead of moving
+the timeline. Text boxes keep their keys: click outside a text box to drive
+again.
+
+With **Pause exploring and cancel Nav2 goals when driving** selected (the
+default), starting to drive pauses explore_lite and cancels any Nav2 goal, so
+that Nav2 and your keys don't both send speed commands. Click **Resume
+exploring** to hand the robot back to explore_lite.
+
+The monitor sends the commands on `/cmd_vel` as
+`geometry_msgs/TwistStamped`, like Nav2. They are recorded, so a replay shows
+them in blue like any other command.
 
 ## The window at a glance
 
 The window has five areas:
 
 1.  **Toolbar** (top). It shows the mode: **LIVE** (in red while recording)
-    or **REPLAY** with the run name. It also has the **Analysis** and **Raw**
-    view buttons, the **Angles** unit, the recording buttons, and **Runs…**.
-2.  **Topics panel** (left). Every topic, with its rate and status. Clear a
-    check box to hide a topic.
+    or **REPLAY** with the run name, and **DRIVING** while you drive with the
+    keyboard. It also has **Start**, **Stop**, **Restart**, and **Drive**,
+    the **Analysis** and **Raw** view buttons, the **Angles** unit, and
+    **Runs…**.
+2.  **Run panel** and **Topics panel** (left, as tabs). The settings of the
+    next run; every topic, with its rate and status.
 3.  **View** (center). The **Analysis** view or the **Raw** view.
-4.  **Events panel** (right). Everything the monitor noticed, such as
-    collisions, failed goals, and warnings from nodes.
-5.  **Timeline** (bottom). The whole run as a bar, with playback controls.
+4.  **Robot control** and **Events panel** (right). Exploration and keyboard
+    driving; everything the monitor noticed, such as collisions, failed
+    goals, and warnings from nodes.
+5.  **Launch output** and **Timeline** (bottom). What the simulation prints;
+    the whole run as a bar, with playback controls.
+
+You can move, close, and reopen each panel with the **View** menu.
 
 ### What the colors mean
 
@@ -293,6 +474,11 @@ data again.
 
 | Keys                   | Action |
 |------------------------|--------|
+| F5                     | Start a run. |
+| Shift+F5               | Stop the run. |
+| Ctrl+F5                | Restart the run. |
+| F2                     | Drive with the keyboard, or stop driving. While driving, the arrow keys and Space drive the robot. |
+| F3                     | Pause or resume exploring. |
 | Space                  | Play or pause. In live mode, pause the view. |
 | Left, Right            | Move back or forward by the step size. |
 | Shift+Left, Shift+Right | Move back or forward by 0.1 s. |
@@ -302,15 +488,21 @@ data again.
 | L                      | Follow live data. |
 | Ctrl+1, Ctrl+2         | Show the Analysis view or the Raw view. |
 | Ctrl+U                 | Switch between degrees and radians. |
-| Ctrl+R                 | Open the run manager. |
+| Ctrl+R                 | Open the saved runs. |
 | Ctrl+O                 | Open a run folder. |
 | F1                     | Open this manual. |
 
 ## Record runs
 
-While recording, the toolbar shows **LIVE · recording** followed by the run
-name, and the number of recorded messages appears on the right.
+A run that you start from the Run panel is recorded from **Start** to its
+end. While recording, the toolbar shows **LIVE · recording** followed by the
+run name, and the number of recorded messages appears on the right.
 
+To record a system that you started some other way (the real robot, or a
+launch in a terminal with `monitor:=false`), use the recording buttons in the
+toolbar. They appear when no run from the Run panel is active.
+
+*   To start recording, click **Start recording**.
 *   To save the current run and start a new one, for example after you reset
     the simulation, click **New run**.
 *   To stop recording, click **Stop recording**. The finished run stays on
@@ -323,7 +515,7 @@ messages per second.
 
 ## Manage runs
 
-Open the run manager with **Runs…** or Ctrl+R. The table lists all runs with
+Open the saved runs with **Runs…** or Ctrl+R. The table lists all runs with
 their start time, duration, distance, number of errors and warnings, goals
 reached and failed, explored area, label, tags, size, and status. Click a
 column header to sort by it.
@@ -332,6 +524,7 @@ column header to sort by it.
 |------|-------|
 | Find a run | Type in the search box. It searches names, labels, tags, and notes. |
 | Replay a run | Select it and click **Open replay**, or double-click it. |
+| Run it again | Select it and click **Use its settings**. The Run panel then holds the settings of that run; click **Start**. |
 | Rename a run | Select it and click **Rename…**. The folder name stays the same. |
 | Write notes and tags | Select the run and click **Notes and tags…**. Write what you changed and what happened, so that you can compare runs later. |
 | Keep a run | Select it and click **Star**. Starred runs are listed first, and deleting them asks for extra confirmation. |
@@ -345,8 +538,10 @@ Runs are stored in `~/maze_runs`, one folder per run:
 
 ```
 ~/maze_runs/2026-11-12_14-03-27_explore/
-├── run.json   Name, label, launch arguments, notes, tags, star, and summary
-└── bag/       The recording
+├── run.json     Name, label, launch arguments, settings, notes, tags, star, and summary
+├── launch.log   What the simulation printed (runs started from the Run panel)
+├── params/      The parameter files the run used, with your changes
+└── bag/         The recording
 ```
 
 The recording is a standard rosbag2 recording in SQLite 3 format, so other ROS
@@ -500,6 +695,25 @@ Replays use the thresholds of the monitor that opens them, so you can open an
 old run again with new thresholds.
 
 ## Troubleshooting
+
+**Start says "Could not run ros2".** The monitor starts the simulation with
+the `ros2` command, so it needs a terminal in which ROS 2 is set up. Open a
+new terminal (or run `source ~/ros2_ws/install/setup.bash`) and start the
+monitor again.
+
+**The run shows "Failed to start".** The message and the **Launch output**
+panel show why. A common cause is a world or parameter file that doesn't
+exist, or a leftover Gazebo server (see [Leftover
+simulations](#leftover-simulations)).
+
+**The keys don't drive the robot.** Check that the toolbar shows
+**DRIVING** and that no text box has the keyboard focus (click on the map).
+The robot also needs `/cmd_vel` to reach Gazebo: check that the simulation
+is running.
+
+**The robot jerks while driving.** Nav2 also sends speed commands. Select
+**Pause exploring and cancel Nav2 goals when driving**, or pause exploring
+first.
 
 **The window is wider than the screen.** With both side panels open, the
 window needs about 1430 pixels. Close the **Topics** or **Events** panel with

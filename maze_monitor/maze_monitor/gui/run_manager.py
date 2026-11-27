@@ -1,4 +1,4 @@
-"""Run manager: list, search, open, rename, annotate, star, export, and delete runs."""
+"""Saved runs: list, search, open, rename, annotate, star, export, delete, and run again."""
 
 import datetime
 import os
@@ -56,10 +56,11 @@ class NotesDialog(QDialog):
 
 class RunManager(QDialog):
     open_requested = Signal(str)
+    settings_requested = Signal(str)   # run folder whose settings go into the Run panel
 
     def __init__(self, store, current_path_fn, parent=None):
         super().__init__(parent)
-        self.setWindowTitle('Runs')
+        self.setWindowTitle('Saved runs')
         self.store = store
         self.current_path_fn = current_path_fn  # path of the run being recorded, or None
         self.settings = QSettings('maze_monitor', 'maze_monitor')
@@ -103,6 +104,8 @@ class RunManager(QDialog):
         self.buttons = {}
         for key, text, fn, tip in (
                 ('open', 'Open replay', self._open, 'Replay the selected run (double-click also works)'),
+                ('again', 'Use its settings', self._again,
+                 'Put the settings of the selected run into the Run panel, to run it again'),
                 ('rename', 'Rename…', self._rename, 'Change the display name'),
                 ('notes', 'Notes and tags…', self._notes, 'Write what you changed and what happened'),
                 ('star', 'Star', self._star, 'Mark runs you want to keep; starred runs sort first'),
@@ -196,7 +199,7 @@ class RunManager(QDialog):
     def _selection_changed(self):
         sel = self.selected()
         one = len(sel) == 1
-        for key in ('open', 'rename', 'notes', 'export', 'folder'):
+        for key in ('open', 'again', 'rename', 'notes', 'export', 'folder'):
             self.buttons[key].setEnabled(one)
         self.buttons['star'].setEnabled(bool(sel))
         self.buttons['delete'].setEnabled(bool(sel) and not any(self._is_current(r) for r in sel))
@@ -214,6 +217,12 @@ class RunManager(QDialog):
         sel = self.selected()
         if len(sel) == 1 and not self._is_current(sel[0]):
             self.open_requested.emit(sel[0].path)
+            self.accept()
+
+    def _again(self):
+        sel = self.selected()
+        if len(sel) == 1:
+            self.settings_requested.emit(sel[0].path)
             self.accept()
 
     def _rename(self):

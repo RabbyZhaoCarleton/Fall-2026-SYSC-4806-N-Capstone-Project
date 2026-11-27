@@ -18,7 +18,7 @@ setup(
     zip_safe=True,
     maintainer='rabbynun',
     maintainer_email='rabbynun@todo.todo',
-    description='Debugging and test monitor for the maze robot.',
+    description='Run manager and debugging monitor for the maze robot.',
     license='TODO: License declaration',
     tests_require=['pytest'],
     entry_points={

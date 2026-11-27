@@ -62,6 +62,30 @@ thresholds:
   slow_rtf: 0.5                  # real-time factor below which the simulation counts as slow
   exploration_stall: 60.0        # s without map growth while exploring
 
+launch:
+  # When you stop a run, the simulation gets Ctrl+C (SIGINT) and this many
+  # seconds to shut down; then SIGTERM, and after term_timeout more, SIGKILL.
+  stop_timeout: 20.0             # s
+  term_timeout: 5.0              # s
+
+control:
+  explore_resume_topic: /explore/resume   # std_msgs/Bool: false pauses explore_lite, true resumes
+  explore_node: explore_node              # node names the Run panel watches to show what is up
+  nav2_node: bt_navigator
+  slam_node: slam_toolbox
+  # Cancelling all Nav2 goals when you start driving with the keyboard
+  navigation_cancel_service: /navigate_to_pose/_action/cancel_goal
+
+teleop:
+  topic: /cmd_vel                # the simulation bridges it to Gazebo's diff drive
+  stamped: true                  # geometry_msgs/TwistStamped (Nav2 uses enable_stamped_cmd_vel)
+  frame_id: base_link
+  rate_hz: 20.0                  # commands per second while a key is held
+  linear_speed: 0.15             # m/s, starting value of the Drive speed box
+  angular_speed: 1.2             # rad/s, starting value of the Turn speed box
+  max_linear_speed: 0.22         # m/s, TurtleBot3 Burger limit
+  max_angular_speed: 2.84        # rad/s, TurtleBot3 Burger limit
+
 # Topics hidden when the monitor starts. You can show them in the Topics panel.
 hidden_topics:
   - /clock

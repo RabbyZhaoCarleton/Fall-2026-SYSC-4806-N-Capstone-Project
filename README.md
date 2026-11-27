@@ -54,15 +54,25 @@ cd ~/ros2_ws && colcon build --symlink-install
 
 Always build from `~/ros2_ws`, never from inside `src`, and open a new terminal after a package is added. If switching branches leaves errors like `package '...' not found`, do a clean build: `cd ~/ros2_ws && rm -rf build install log && colcon build --symlink-install`.
 
-Then run the simulation:
+Then open the monitor, which starts, stops and restarts simulation runs for you:
 
 ```bash
-ros2 launch maze_sim maze.launch.py explore:=true gui:=false
+ros2 run maze_monitor maze_monitor
 ```
 
 Work on a branch and open a pull request rather than pushing to `main`; the **build** check must pass before merging.
 
 ## Using the simulation
+
+The easiest way is the maze monitor, which works as a run manager:
+
+```bash
+ros2 run maze_monitor maze_monitor
+```
+
+Pick the settings in its **Run** panel (explore or drive yourself, Gazebo window, RViz, world, start pose, single Nav2/SLAM/explore_lite parameters) and press **Start** (F5), **Stop** (Shift+F5) or **Restart** (Ctrl+F5). Every run is recorded to `~/maze_runs` with its settings, parameter files and launch output. **Robot control** pauses and resumes exploration (F3) and drives the robot with W A S D or the arrow keys (F2). Save settings you use often as presets, then `ros2 run maze_monitor maze_monitor --preset NAME --start`. See `maze_monitor/docs/user-manual.md`.
+
+Or start a run from a terminal, which also opens a monitor that records it:
 
 ```bash
 ros2 launch maze_sim maze.launch.py [argument:=value ...]
@@ -77,6 +87,7 @@ ros2 launch maze_sim maze.launch.py [argument:=value ...]
 | `slam` | `true` | Start slam_toolbox |
 | `world` | `maze_sim/worlds/maze.sdf` | World file to load |
 | `x_pose`, `y_pose` | `0.25`, `-0.25` | Robot start position (m) |
+| `monitor` | `true` | Open a monitor that records this run (the run manager passes `monitor:=false`) |
 
 `--show-args` lists every argument, including the parameter-file overrides.
 
