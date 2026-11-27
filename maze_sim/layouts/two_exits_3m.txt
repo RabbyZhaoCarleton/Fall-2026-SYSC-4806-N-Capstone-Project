@@ -1,0 +1,22 @@
+# 3 m x 3 m maze (6 x 6 cells of 0.5 m) with two exits.
+#
+# Exit A: gap in the right wall, third row (x = 3.0, y -1.0 to -1.5).
+# Exit B: gap in the bottom wall, fifth column (x 2.0-2.5, y = -3.0).
+# Every cell is connected (a perfect maze from a seeded DFS, seed 7), so both
+# exits are reachable from the default spawn in the top-left cell (0.25, -0.25).
+#
+# Cells are 0.5 m. Origin is the top-left corner; y points up, so rows go down.
+# Generate the world with:  scripts/make_maze.py layouts/two_exits_3m.txt
++--+--+--+--+--+--+
+|     |           |
++--+  +--+--+  +  +
+|  |        |  |  |
++  +--+--+  +  +  +
+|        |  |  |   
++  +--+--+  +--+  +
+|     |     |     |
++  +  +  +--+  +  +
+|  |  |     |  |  |
++  +  +--+  +  +  +
+|  |           |  |
++--+--+--+--+  +--+
