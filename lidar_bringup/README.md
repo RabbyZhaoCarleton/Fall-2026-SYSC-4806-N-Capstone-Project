@@ -150,3 +150,22 @@ python3 -m lidar_bringup.mock_hardware   # 50 Hz mock loop + type-guard demo
 - The C1 is a **2D** scanner. Section 2.4 of the proposal calls it "2.5D (detects elevation changes)";
   consider rewording that, since the proposal also lists "Not 3D" as a con.
 - The scan rotation is fixed at ~10 Hz and not adjustable on the C1; plan `expected_hz`, Nav2 and SLAM update rates around that.
+
+## LiDAR orientation and accuracy tests (scripts/)
+Plain Python scripts (not ROS nodes); run them in a second terminal while the driver is running.
+
+**0 deg points AWAY from the arrow on the C1 housing.** `find_front.py` showed a flat board placed at the
+arrow at -178.7 deg (2026-11-26). In `/scan` (laser_frame) the arrow side is therefore +-180 deg, and the
+launch file's `lidar_yaw` defaults to pi so that robot-forward (base_link +x) is the arrow side.
+
+| Script | What it does |
+|---|---|
+| `scripts/find_front.py` | Averages 2 s of scans, finds every flat surface around the LiDAR and the angle at which the LiDAR is perpendicular to it. `--step 2` for a finer table, `--center 180 --span 30 --step 0.5` to zoom. |
+| `scripts/accuracy_steps.py` | Range accuracy at several distances: counts down (`--wait`, default 10 s) while you move a flat board, records `--scans` (50) scans per position, fits the board in each scan and reports mean, std, 95 % CI. With `--truth d1 d2 ...` (tape distances in m, from the centre of the spinning head) it adds error, RMSE and the calibration line `measured = offset + scale x true`. Results go to `~/lidar_logs/`; `--analyze <csv> --truth ...` re-analyses a saved run. Use 5+ distances over the working range for a trustworthy calibration. |
+
+```bash
+python3 lidar_bringup/scripts/find_front.py --center 180 --span 30 --step 0.5
+python3 lidar_bringup/scripts/accuracy_steps.py --positions 5 --wait 15 --truth 0.30 0.60 1.00 1.50 2.50
+```
+First result (board at ~0.10/0.15/0.25 m, tape distances approximate): precision 0.2-0.5 mm (std of the fitted
+distance), every scan within 9 mm of the tape distance, RMSE 4.2 mm. Well inside the 5 cm requirement.

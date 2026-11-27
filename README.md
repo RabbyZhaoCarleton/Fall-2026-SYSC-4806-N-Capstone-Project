@@ -120,7 +120,7 @@ ros2 launch lidar_bringup rplidar_c1.launch.py
 | `use_rviz` | `false` | Open RViz showing `/scan` (PC only, not on the Pi) |
 | `use_monitor` | `true` | Report scan rate, latency and dropouts |
 | `serial_port` | `/dev/rplidar` | Serial device, e.g. `/dev/ttyUSB0` before the udev rule is installed |
-| `lidar_x`, `lidar_y`, `lidar_z`, `lidar_yaw` | `0`, `0`, `0.10`, `0` | Mounting pose on the robot (m, rad) |
+| `lidar_x`, `lidar_y`, `lidar_z`, `lidar_yaw` | `0`, `0`, `0.10`, `3.14159` | Mounting pose on the robot (m, rad). Yaw is pi because the C1's 0 deg points opposite the arrow on its housing; pi makes the arrow face robot-forward |
 
 Check it works (from a second terminal; `/scan` is Best Effort, so the tools need the same QoS):
 
