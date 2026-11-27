@@ -133,7 +133,7 @@ class ConfigEditor(QDialog):
         self.limits = {}
         for key, label in LIMIT_FIELDS:
             e = QLineEdit()
-            e.textChanged.connect(self.validate)
+            e.textChanged.connect(lambda *_: self.validate())
             self.limits[key] = e
             form.addRow(label, e)
         self.rec_profile = QComboBox()
@@ -150,8 +150,8 @@ class ConfigEditor(QDialog):
         form.addRow('Keep recordings', self.retention)
         form.addRow('Exit match tolerance (m)', self.tolerance)
         for w in (self.name, self.tolerance):
-            w.textChanged.connect(self.validate)
-        self.profile.currentIndexChanged.connect(self.validate)
+            w.textChanged.connect(lambda *_: self.validate())
+        self.profile.currentIndexChanged.connect(lambda *_: self.validate())
         return box
 
     def _sets(self):
