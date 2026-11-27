@@ -35,7 +35,15 @@ def _frame(name):
 
 # ======================================================================== pose
 class PoseInterpreter(Interpreter):
-    """Robot position and heading in the map frame; localization jumps."""
+    """Robot position and heading in the map frame; localization jumps.
+
+    The pose is SLAM's map->odom composed with odom->base_footprint. The latter
+    is taken from /tf when something publishes it (the EKF, or gz when the EKF
+    is off), because that is the transform map->odom was computed against.
+    The /odom message is only a fallback: with the EKF on it is raw wheel
+    odometry, whose heading can be tens of degrees off after wheel slip, which
+    drew the robot and its scans rotated against the map.
+    """
 
     types = (ODOM, TF)
 
@@ -43,6 +51,7 @@ class PoseInterpreter(Interpreter):
         self.odom_pose = None
         self.prev_odom_pose = None
         self.map_odom = None
+        self.tf_odom_pose = None  # odom->base_footprint from /tf
         self.distance = 0.0
         self.last_stamp = None
 
@@ -78,11 +87,16 @@ class PoseInterpreter(Interpreter):
         ctx.emit(t, 'pose.distance', self.distance, 'Distance driven (odometry)', 'm', min_interval=0.2)
         self._publish_pose(ctx, t)
 
+    def base_pose(self):
+        """The robot in the odom frame, as the rest of the system sees it."""
+        return self.tf_odom_pose if self.tf_odom_pose is not None else self.odom_pose
+
     def _publish_pose(self, ctx, t):
-        if self.odom_pose is None:
+        if self.base_pose() is None:
             return
         frame = 'map' if self.map_odom is not None else 'odom'
-        pose = self.map_odom.compose(self.odom_pose) if self.map_odom else self.odom_pose
+        base = self.base_pose()
+        pose = self.map_odom.compose(base) if self.map_odom else base
         ctx.state['pose'] = pose
         ctx.emit(t, 'pose.x', pose.x, 'Position x', 'm', min_interval=0.05)
         ctx.emit(t, 'pose.y', pose.y, 'Position y', 'm', min_interval=0.05)
@@ -91,16 +105,22 @@ class PoseInterpreter(Interpreter):
 
     def _on_tf(self, ctx, t, msg):
         for tr in msg.transforms:
-            if _frame(tr.header.frame_id) != 'map' or _frame(tr.child_frame_id) != 'odom':
+            parent, child = _frame(tr.header.frame_id), _frame(tr.child_frame_id)
+            if parent == 'odom' and child == 'base_footprint':
+                self.tf_odom_pose = Pose2D(tr.transform.translation.x, tr.transform.translation.y,
+                                           yaw_from_quaternion(tr.transform.rotation))
+                self._publish_pose(ctx, t)
+                continue
+            if parent != 'map' or child != 'odom':
                 continue
             q = tr.transform.rotation
             new = Pose2D(tr.transform.translation.x, tr.transform.translation.y,
                          yaw_from_quaternion(q))
             old = self.map_odom
             self.map_odom = new
-            if old is not None and self.odom_pose is not None:
-                before = old.compose(self.odom_pose)
-                after = new.compose(self.odom_pose)
+            if old is not None and self.base_pose() is not None:
+                before = old.compose(self.base_pose())
+                after = new.compose(self.base_pose())
                 jump = before.distance(after)
                 turn = abs(DEG(wrap(after.yaw - before.yaw)))
                 ctx.emit(t, 'loc.correction', jump, 'SLAM correction step', 'm', min_interval=0.1)
