@@ -1,0 +1,6 @@
+# Ask the global planner for the delivery plan.
+# replan = true: plan again now from the robot's current pose (do this before
+# starting each trip). replan = false: return the latest plan.
+bool replan
+---
+DeliveryPlan plan

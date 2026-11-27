@@ -1,0 +1,33 @@
+# Mission scenario for layouts/three_exits_3m.txt (worlds/three_exits_3m.sdf).
+#
+# Used only by the simulators (mock_task_manager, fake_world, plan_offline). On the
+# robot the same information comes from the GCS: the object classes from the
+# OpenCV classifier, the class -> exit table from its lookup table, and the bin
+# names from the signs / QR codes at the exits.
+
+# Where the robot starts (and returns after exploring): the entrance.
+start: {x: 0.25, y: -0.25, yaw: 0.0}
+
+# The objects waiting at the entrance (map frame, m). Their classes are what the
+# classifier would report after the robot scans them.
+objects:
+  - {id: obj_1, class: red_cube,      x: 0.40, y: -0.15}
+  - {id: obj_2, class: blue_cylinder, x: 0.40, y: -0.25}
+  - {id: obj_3, class: green_prism,   x: 0.40, y: -0.35}
+  - {id: obj_4, class: red_cube,      x: 0.30, y: -0.40}
+  - {id: obj_5, class: green_prism,   x: 0.20, y: -0.40}
+  - {id: obj_6, class: blue_cylinder, x: 0.10, y: -0.40}
+
+# Lookup table: object class -> exit bin (proposal 2.3.3, step 4).
+classes:
+  red_cube: exit_A
+  blue_cylinder: exit_B
+  green_prism: exit_C
+
+# Ground truth: the middle of each exit opening (where its bin is). With
+# exits_source: explore the positions come from explore_lite and these are only
+# used to name the exits it finds (the nearest one within exit_match_radius).
+exits:
+  exit_A: {x: 1.75, y: 0.0}     # top wall
+  exit_B: {x: 3.0, y: -0.75}    # right wall
+  exit_C: {x: 1.75, y: -3.0}    # bottom wall

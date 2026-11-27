@@ -1,0 +1,25 @@
+# 3 m x 3 m maze (6 x 6 cells of 0.5 m) with three exits, for the global planner.
+#
+# Exit A: gap in the top wall, fourth column    (x 1.5-2.0, y = 0)
+# Exit B: gap in the right wall, second row     (x = 3.0, y -0.5 to -1.0)
+# Exit C: gap in the bottom wall, fourth column (x 1.5-2.0, y = -3.0)
+# A seeded random maze (maze_planning random_layout, seed 4) with three extra
+# openings, so some places can be reached by more than one route.
+# The robot starts in the top-left cell (0.25, -0.25); the objects wait there.
+#
+# Cells are 0.5 m. Origin is the top-left corner; y points up, so rows go down.
+# The Gazebo world worlds/three_exits_3m.sdf was made from this file with
+# maze_sim/scripts/make_maze.py's build().
++--+--+--+  +--+--+
+|  |              |
++  +--+  +--+  +  +
+|     |        |   
++--+  +  +--+  +  +
+|     |     |     |
++  +--+--+  +  +  +
+|     |        |  |
++--+  +--+--+  +  +
+|  |  |        |  |
++  +  +  +--+--+  +
+|        |        |
++--+--+--+  +--+--+

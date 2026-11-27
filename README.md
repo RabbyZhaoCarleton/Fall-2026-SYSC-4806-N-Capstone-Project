@@ -8,6 +8,8 @@ An autonomous robot that maps an unknown grid maze with a 2D lidar (SLAM), plans
 | `maze_navigation` | slam_toolbox, Nav2 and explore_lite configuration |
 | `maze_bringup` | Hardware drivers and launch files for the real robot |
 | `maze_sim` | Gazebo worlds, maze generator, simulation launch files |
+| `maze_interfaces` | Messages and services shared between nodes (objects, exit bins, delivery plan) |
+| `maze_planning` | Global path planning: the fastest order to deliver the objects to their exits |
 
 ## Setup
 
@@ -85,6 +87,14 @@ Useful commands while it runs (from a second terminal):
 ```bash
 ros2 run nav2_map_server map_saver_cli -f ~/maze_map                       # save the map
 ros2 topic pub --once /explore/resume std_msgs/msg/Bool "{data: false}"     # pause exploring (true resumes)
+```
+
+**Delivery (global planning) simulations** (details: `maze_planning/docs/global-planner-guide.md`):
+
+```bash
+ros2 launch maze_planning sim_lightweight.launch.py      # seconds: fake maze/robot, no Gazebo
+ros2 launch maze_planning sim_delivery.launch.py         # Gazebo: explore, then deliver
+ros2 run maze_planning plan_offline --benchmark 20       # check plans against brute force
 ```
 
 **Change the maze:** edit the ASCII drawing in `maze_sim/scripts/make_maze.py` and run it; it writes `maze_sim/worlds/maze.sdf`.

@@ -1,0 +1,17 @@
+# Mission scenario for layouts/default_maze.txt (maze_sim/worlds/maze.sdf, the
+# default Gazebo world). See three_exits_3m.yaml for what each part means.
+start: {x: 0.25, y: -0.25, yaw: 0.0}
+
+objects:
+  - {id: obj_1, class: red_cube,      x: 0.40, y: -0.15}
+  - {id: obj_2, class: blue_cylinder, x: 0.40, y: -0.25}
+  - {id: obj_3, class: red_cube,      x: 0.40, y: -0.35}
+  - {id: obj_4, class: blue_cylinder, x: 0.30, y: -0.40}
+
+classes:
+  red_cube: exit_A
+  blue_cylinder: exit_B
+
+exits:
+  exit_A: {x: 2.0, y: -0.25}    # right wall, top row
+  exit_B: {x: 1.25, y: -1.5}    # bottom wall, third column

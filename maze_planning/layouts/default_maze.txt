@@ -1,0 +1,12 @@
+# The maze of maze_sim/worlds/maze.sdf (the MAZE drawing in maze_sim/scripts/make_maze.py).
+# 2 m x 1.5 m (4 x 3 cells of 0.5 m) with two exits:
+#   exit_A: gap in the right wall, top row      (x = 2.0, y -0.0 to -0.5)
+#   exit_B: gap in the bottom wall, third column (x 1.0-1.5, y = -1.5)
+# The robot starts in the top-left cell (0.25, -0.25); the objects wait there.
++--+--+--+--+
+|     |     
++  +  +  +--+
+|  |     |  |
++  +--+--+  +
+|           |
++--+--+  +--+

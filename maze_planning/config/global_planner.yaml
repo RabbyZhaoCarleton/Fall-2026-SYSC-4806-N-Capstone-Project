@@ -1,0 +1,43 @@
+# Parameters of the global_planner node (maze_planning/ros/global_planner_node.py).
+# The same file is used on the robot and in both simulators.
+
+global_planner:
+  ros__parameters:
+    # ---------------------------------------------------------- topics and frames
+    global_frame: map
+    robot_frame: base_link              # same as Nav2's robot_base_frame
+    costmap_topic: /global_costmap/costmap
+    objects_topic: /delivery/objects
+    exits_topic: /delivery/exits
+    plan_topic: /delivery/plan          # also <plan_topic>_path and <plan_topic>_markers
+    auto_replan: true                   # plan again whenever the objects or exits change
+
+    # ---------------------------------------------------------- the task
+    capacity: 1                         # objects the robot carries at once (1 for now)
+    max_exact_objects: 12               # more objects than this: heuristic instead of exact solver
+
+    # ---------------------------------------------------------- the cost grid
+    # Edge cost c(u,v) = d(u,v) * (1 + mu * kappa(v)), proposal 2.3.2. Keep mu the
+    # same as Nav2's planner (Smac 2D cost_travel_multiplier, default 2.0) so the
+    # global planner's routes match the ones Nav2 will drive.
+    cost_travel_multiplier: 2.0
+    allow_unknown: false                # proposal: allow_unknown = false (also keeps routes inside the maze)
+    blocked_threshold: 99               # costmap value from which a cell is impassable (99 = inscribed)
+
+    # ---------------------------------------------------------- goal poses
+    robot_snap_distance: 0.3            # m to look for a free cell if the robot is in the inflation zone
+    pickup_standoff: 0.20               # m from object centre to robot centre when picking (set from the arm's reach)
+    exit_standoff: 0.25                 # m from the exit opening to the robot centre when dropping
+    approach_search_radius: 0.6         # m around an object / exit searched for its approach pose
+    max_goal_kappa: 0.8                 # 0..1; approach poses no closer to walls than this cost
+    smoothing_max_kappa: 0.9            # 0..1; straightened routes may not pass cells costlier than this
+
+    # ---------------------------------------------------------- time model
+    # Tune these from the "estimated ... took ..." lines the task manager logs.
+    cruise_speed: 0.12                  # m/s average driving speed (nav2_maze.yaml max_vel_x: 0.15)
+    rotate_speed: 0.8                   # rad/s average in-place turning speed (max_vel_theta: 1.0)
+    inplace_turn_threshold: 0.785       # rad; sharper turns are made in place (rotation shim: 0.785)
+    turn_overhead: 0.5                  # s lost per in-place turn (stop, settle)
+    holonomic: false                    # true once Nav2 drives the mecanum base sideways (max_vel_y > 0)
+    pick_time: 20.0                     # s per pickup (visual servoing + grasp + check), measure on the robot
+    place_time: 8.0                     # s per drop-off

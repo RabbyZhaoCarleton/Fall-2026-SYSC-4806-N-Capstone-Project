@@ -46,12 +46,23 @@ jobs:
       - name: Build
         run: |
           source /opt/ros/jazzy/setup.bash
-          colcon build --packages-up-to maze_sim maze_description maze_navigation maze_bringup
+          colcon build --packages-up-to maze_sim maze_description maze_navigation maze_bringup maze_planning
 
       - name: Check that the simulation launch file loads
         run: |
           source install/setup.bash
           ros2 launch maze_sim maze.launch.py --show-args > /dev/null
+
+      - name: Check that the delivery simulation launch files load
+        run: |
+          source install/setup.bash
+          ros2 launch maze_planning sim_delivery.launch.py --show-args > /dev/null
+          ros2 launch maze_planning sim_lightweight.launch.py --show-args > /dev/null
+
+      - name: Test the global planner
+        run: |
+          source install/setup.bash
+          python3 -m pytest -q src/capstone/maze_planning/test
 
       - name: Test the maze monitor
         run: |
