@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+"""maze_experiments: the experiment suite's command line and GUI (no arguments: GUI)."""
+import sys
+
+from maze_experiments.main import main
+
+sys.exit(main())

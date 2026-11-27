@@ -8,6 +8,8 @@ An autonomous robot that maps an unknown grid maze with a 2D lidar (SLAM), plans
 | `maze_navigation` | slam_toolbox, Nav2 and explore_lite configuration |
 | `maze_bringup` | Hardware drivers and launch files for the real robot |
 | `maze_sim` | Gazebo worlds, maze generator, simulation launch files |
+| `maze_monitor` | Live and replay monitor that records every run |
+| `maze_experiments` | Test suite: many simulated runs on random mazes, and their results |
 
 ## Setup
 
@@ -89,4 +91,32 @@ ros2 topic pub --once /explore/resume std_msgs/msg/Bool "{data: false}"     # pa
 
 **Change the maze:** edit the ASCII drawing in `maze_sim/scripts/make_maze.py` and run it; it writes `maze_sim/worlds/maze.sdf`.
 
+## Experiment suite
+
+`maze_experiments` measures how well the robot stack explores and maps mazes, finds their exits and returns to its start. It generates random mazes, runs the simulation on them many times (several at once, each isolated in its own ROS domain and Gazebo partition), records every run, and turns the recordings into results. Open the application with:
+
+```bash
+maze_experiments
+```
+
+or use the same operations from the command line:
+
+```bash
+maze_experiments config example > my_config.yaml      # edit it, then:
+maze_experiments config create my_config.yaml
+maze_experiments run "5x5, 2 exits" --cpus 6 --memory 8G
+maze_experiments status
+maze_experiments report <experiment> --format md
+```
+
+Data goes to `~/maze_experiments` (it must be on the Linux file system, not under `/mnt/c`). An experiment keeps running in the background when the window or terminal is closed; a stopped one can be resumed. See the [user manual](maze_experiments/docs/user-manual.md) and the [design document](maze_experiments/docs/design.md).
+
+The suite starts each simulation with `maze.launch.py ... monitor:=false gz_server_check:=partition`. These and the `robot_*` arguments (for a robot profile other than the Burger) are off by default, so a launch by hand behaves as before.
+
 **Common problems:** "A Gazebo server is already running" or the robot stutters → run `gzkill`. Gazebo/RViz slow → `python3 tools/check_gpu.py`; if it says `llvmpipe`, rerun `./setup.sh`. Gazebo window crashes → use `gui:=false`. RViz ignores clicks → minimize and restore it, or `wsl --shutdown` from PowerShell.
+
+**WSL clock jumps.** Nav2 aborts goals with "Unable to transform robot pose", or the map stops updating for a few seconds at a time: the Ubuntu clock is jumping. Check with `journalctl --since "-2 min" | grep "Clock change detected"`; any output means it jumps. The experiment suite checks this before an experiment and repeats runs during which the clock jumped. To fix it:
+
+1. Correct the Windows clock: **Settings > Time & language > Date & time > Sync now**.
+2. Let WSL take its time from Windows only: `sudo systemctl disable --now systemd-timesyncd`.
+3. Run `wsl --shutdown` in Windows PowerShell and open a new Ubuntu terminal.

@@ -19,8 +19,16 @@ def start_gazebo_server(context):
     # Refuse to start if an old Gazebo server is still running. A leftover server
     # publishes its own /clock, /odom and /scan, and the new robot may even be
     # spawned into it, which makes the robot stutter or ignore commands.
+    check = LaunchConfiguration('gz_server_check').perform(context).strip().lower()
+    if check not in ('all', 'partition'):
+        raise RuntimeError(f'gz_server_check must be "all" or "partition", not "{check}"')
     leftover = subprocess.run(['pgrep', '-af', 'gz sim .*-s'],
                               capture_output=True, text=True).stdout.strip()
+    if leftover and check == 'partition':
+        # Only a server in this launch's own Gazebo partition (GZ_PARTITION) can
+        # interfere; servers in other partitions don't see this launch's topics.
+        leftover = '\n'.join(line for line in leftover.splitlines()
+                             if same_gz_partition(line.split()[0]))
     if leftover:
         raise RuntimeError(
             'A Gazebo server is already running:\n' + leftover +
@@ -46,6 +54,17 @@ def start_gazebo_server(context):
             }.items(),
         ),
     ]
+
+
+def same_gz_partition(pid):
+    """True if process pid runs in this launch's Gazebo partition (or can't be read)."""
+    mine = os.environ.get('GZ_PARTITION', '')
+    try:
+        with open(f'/proc/{pid}/environ', 'rb') as f:
+            env = dict(item.split(b'=', 1) for item in f.read().split(b'\0') if b'=' in item)
+    except OSError:
+        return True
+    return env.get(b'GZ_PARTITION', b'').decode() == mine
 
 
 def ground_truth_bridge(world_path):
@@ -149,18 +168,26 @@ def spawn_robot(context):
     tb3_gazebo = get_package_share_directory('turtlebot3_gazebo')
     x_pose = LaunchConfiguration('x_pose').perform(context)
     y_pose = LaunchConfiguration('y_pose').perform(context)
+    # Robot profile arguments (maze_experiments). Empty: the TurtleBot3 defaults.
+    robot_model = LaunchConfiguration('robot_model').perform(context).strip()
+    robot_sdf = LaunchConfiguration('robot_sdf').perform(context).strip()
+    robot_bridge = LaunchConfiguration('robot_bridge_config').perform(context).strip()
+    spawn_z = LaunchConfiguration('robot_spawn_z').perform(context).strip() or '0.01'
     if not is_true(LaunchConfiguration('ekf').perform(context)):
+        if robot_model or robot_sdf or robot_bridge:
+            raise RuntimeError('The robot_model, robot_sdf and robot_bridge_config arguments '
+                               'need ekf:=true')
         return [IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(tb3_gazebo, 'launch', 'spawn_turtlebot3.launch.py')),
             launch_arguments={'x_pose': x_pose, 'y_pose': y_pose}.items(),
         )]
 
-    model = os.environ.get('TURTLEBOT3_MODEL', 'burger')
-    if model != 'burger':
+    model = robot_model or os.environ.get('TURTLEBOT3_MODEL', 'burger')
+    if model != 'burger' and not robot_bridge:
         raise RuntimeError(
             f'ekf:=true has a bridge config for the burger only (TURTLEBOT3_MODEL={model}). '
-            'Use ekf:=false or add a bridge config for this model.')
+            'Use ekf:=false or add a bridge config for this model (robot_bridge_config).')
     ekf_params = os.path.abspath(os.path.expanduser(
         LaunchConfiguration('ekf_params').perform(context)))
     if not os.path.isfile(ekf_params):
@@ -173,16 +200,18 @@ def spawn_robot(context):
             package='ros_gz_sim',
             executable='create',
             arguments=['-name', model,
-                       '-file', os.path.join(tb3_gazebo, 'models', 'turtlebot3_' + model,
-                                             'model.sdf'),
-                       '-x', x_pose, '-y', y_pose, '-z', '0.01'],
+                       '-file', os.path.abspath(os.path.expanduser(robot_sdf)) if robot_sdf
+                       else os.path.join(tb3_gazebo, 'models', 'turtlebot3_' + model,
+                                         'model.sdf'),
+                       '-x', x_pose, '-y', y_pose, '-z', spawn_z],
             output='screen',
         ),
         Node(
             package='ros_gz_bridge',
             executable='parameter_bridge',
-            arguments=['--ros-args', '-p', 'config_file:=' + os.path.join(
-                maze_sim, 'config', 'turtlebot3_burger_bridge.yaml')],
+            arguments=['--ros-args', '-p', 'config_file:=' + (
+                os.path.abspath(os.path.expanduser(robot_bridge)) if robot_bridge else
+                os.path.join(maze_sim, 'config', 'turtlebot3_burger_bridge.yaml'))],
             output='screen',
         ),
         # Gazebo stamps IMU messages with its own frame name (model/link/sensor),
@@ -309,6 +338,28 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'monitor_record', default_value='true',
             description='Save the run to ~/maze_runs (only with monitor:=true)'),
+        # Used by maze_experiments, which runs several simulations at once, each in
+        # its own ROS domain and Gazebo partition. The defaults keep the behaviour
+        # of a launch by hand unchanged.
+        DeclareLaunchArgument(
+            'gz_server_check', default_value='all',
+            description='Refuse to start while a Gazebo server is running: "all" (any '
+                        'server) or "partition" (only one in this GZ_PARTITION)'),
+        DeclareLaunchArgument(
+            'robot_model', default_value='',
+            description='Robot model name for the spawn (empty: $TURTLEBOT3_MODEL)'),
+        DeclareLaunchArgument(
+            'robot_sdf', default_value='',
+            description='Robot model SDF file to spawn (empty: the TurtleBot3 model)'),
+        DeclareLaunchArgument(
+            'robot_bridge_config', default_value='',
+            description='ros_gz_bridge config for the robot (empty: the burger bridge)'),
+        DeclareLaunchArgument(
+            'robot_urdf', default_value='',
+            description='URDF for robot_state_publisher (empty: the TurtleBot3 URDF)'),
+        DeclareLaunchArgument(
+            'robot_spawn_z', default_value='0.01',
+            description='Height (m) at which the robot is spawned'),
     ]
 
     # The Gazebo window is optional. If it crashes or is closed, the simulation,
@@ -321,12 +372,28 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('gui')),
     )
 
-    robot_state_publisher_cmd = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(launch_file_dir, 'robot_state_publisher.launch.py')
-        ),
-        launch_arguments={'use_sim_time': use_sim_time}.items(),
-    )
+    def start_robot_state_publisher(context):
+        """TurtleBot3's robot_state_publisher, or one for the robot_urdf file if given."""
+        urdf = LaunchConfiguration('robot_urdf').perform(context).strip()
+        if not urdf:
+            return [IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    os.path.join(launch_file_dir, 'robot_state_publisher.launch.py')
+                ),
+                launch_arguments={'use_sim_time': use_sim_time}.items(),
+            )]
+        with open(os.path.abspath(os.path.expanduser(urdf))) as f:
+            description = f.read()
+        return [Node(
+            package='robot_state_publisher',
+            executable='robot_state_publisher',
+            name='robot_state_publisher',
+            output='screen',
+            parameters=[{'use_sim_time': is_true(use_sim_time.perform(context)),
+                         'robot_description': description}],
+        )]
+
+    robot_state_publisher_cmd = OpaqueFunction(function=start_robot_state_publisher)
 
     set_env_vars_resources = AppendEnvironmentVariable(
         'GZ_SIM_RESOURCE_PATH', os.path.join(tb3_gazebo, 'models'))

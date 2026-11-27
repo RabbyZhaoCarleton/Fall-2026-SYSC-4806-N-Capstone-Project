@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>maze_experiments</name>
+  <version>0.1.0</version>
+  <description>Experiment suite for the maze robot: generates random mazes, runs the simulated robot stack on them many times in parallel, records every run, and turns the recordings into results (GUI and command line).</description>
+  <maintainer email="rabbynun@todo.todo">rabbynun</maintainer>
+  <license>TODO: License declaration</license>
+
+  <!-- Recording reuses the monitor's RosBridge, Recorder and RunStore (DR1). -->
+  <exec_depend>maze_monitor</exec_depend>
+  <!-- Runs are launched with maze_sim's maze.launch.py and its parameter files. -->
+  <exec_depend>maze_sim</exec_depend>
+  <exec_depend>maze_navigation</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>rosbag2_py</exec_depend>
+  <exec_depend>rosidl_runtime_py</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>python_qt_binding</exec_depend>
+  <exec_depend>python3-pyqt5</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-matplotlib</exec_depend>
+  <!-- fastdds shm clean (BR16) -->
+  <exec_depend>fastrtps</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>tf2_msgs</exec_depend>
+  <exec_depend>rosgraph_msgs</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
+  <exec_depend>explore_lite_msgs</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

@@ -1,0 +1,10 @@
+# Recording profile "metrics_only" (DR2): drops the two largest topics, /scan and
+# /imu, for large experiments. Every metric of Module E except the lidar-based
+# safety events (close to a wall, contact, wheel slip, bumps) still works; the
+# minimum clearance comes from ground truth either way.
+schema_version: 1
+name: metrics_only
+description: The default rules without /scan and /imu (about a third of the disk use).
+extra_exclude:
+  - /scan
+  - /imu

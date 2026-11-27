@@ -46,7 +46,7 @@ jobs:
       - name: Build
         run: |
           source /opt/ros/jazzy/setup.bash
-          colcon build --packages-up-to maze_sim maze_description maze_navigation maze_bringup
+          colcon build --packages-up-to maze_sim maze_description maze_navigation maze_bringup maze_experiments
 
       - name: Check that the simulation launch file loads
         run: |
@@ -57,3 +57,8 @@ jobs:
         run: |
           source install/setup.bash
           python3 -m pytest -q src/capstone/maze_monitor/test
+
+      - name: Test the experiment suite
+        run: |
+          source install/setup.bash
+          python3 -m pytest -q src/capstone/maze_experiments/test

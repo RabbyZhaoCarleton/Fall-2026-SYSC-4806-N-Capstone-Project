@@ -158,8 +158,9 @@ source /opt/ros/jazzy/setup.bash
 set -u
 if [ "$MODE" = sim ]; then
   # turtlebot3_gazebo is built from the pinned source in capstone.repos, which may also be installed from apt.
+  # maze_experiments is the simulation test suite; it is not built for the robot.
   colcon build --symlink-install --allow-overriding turtlebot3_gazebo \
-    --packages-up-to maze_sim maze_description maze_navigation maze_bringup
+    --packages-up-to maze_sim maze_description maze_navigation maze_bringup maze_experiments
 else
   colcon build --symlink-install --packages-up-to maze_description maze_navigation maze_bringup
 fi
@@ -253,6 +254,10 @@ if [ "$MODE" = sim ]; then
     Open a NEW terminal (so it picks up ~/.bashrc), then start the simulation:
 
         ros2 launch maze_sim maze.launch.py explore:=true gui:=false
+
+    or open the experiment suite (many runs on random mazes):
+
+        maze_experiments
 
     See README.md for the other options and for troubleshooting.
 MSG

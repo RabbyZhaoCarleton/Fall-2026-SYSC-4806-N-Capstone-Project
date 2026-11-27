@@ -1,0 +1,6 @@
+# Recording profile "full": maze_monitor's default recording rules
+# (maze_monitor/config/monitor.yaml), unchanged (DR1, DR2).
+schema_version: 1
+name: full
+description: Everything maze_monitor records by default, including /scan and /imu.
+extra_exclude: []

@@ -1,0 +1,41 @@
+# Robot profile: everything the suite needs to know about the simulated robot
+# (Specifications.md 1.4, FR1). The TurtleBot3 Burger is the stand-in until
+# maze_description has a model of our four-wheel robot. A new profile is a copy
+# of this file with its own values; the suite finds profiles in this folder
+# and in <data dir>/robots/.
+schema_version: 1
+name: burger
+description: TurtleBot3 Burger (two drive wheels and a caster), the stand-in robot
+
+# Environment for the launch. turtlebot3_gazebo picks its model with this.
+env:
+  TURTLEBOT3_MODEL: burger
+
+# maze.launch.py arguments that describe the robot. Empty values keep the
+# launch file's defaults, which are the Burger's (1.2). A four-wheel profile
+# sets robot_model, robot_sdf, robot_bridge_config and robot_urdf.
+launch_args:
+  robot_model: ''
+  robot_sdf: ''
+  robot_bridge_config: ''
+  robot_urdf: ''
+spawn:
+  z: 0.01
+bridge_config: package://maze_sim/config/turtlebot3_burger_bridge.yaml
+
+# Geometry (m)
+footprint_radius: 0.105      # robot centre to outer edge (maze_monitor robot.radius)
+navigation_radius: 0.11      # Nav2 costmap robot_radius
+costmap_resolution: 0.05     # Nav2 costmap resolution
+tested_corridor_width: 0.48  # corridor width the stack was tuned on
+lidar:
+  range_max: 3.5
+  range_min: 0.12
+  mount_height: 0.171        # base_scan above the ground (turtlebot3_burger/model.sdf)
+
+# Default stack parameter files (FR8 lets a maze set choose others).
+stack_params:
+  nav_params: package://maze_navigation/config/nav2_maze.yaml
+  slam_params: package://maze_navigation/config/slam_maze.yaml
+  explore_params: package://maze_navigation/config/explore_maze.yaml
+  ekf_params: package://maze_navigation/config/ekf_maze.yaml

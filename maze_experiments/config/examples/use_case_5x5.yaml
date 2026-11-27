@@ -1,0 +1,47 @@
+# Example configuration (Specifications.md 2.3.1): 5 m x 5 m mazes with 2 exits,
+# 0.48 m corridors and 0.02 m walls (a 10 x 10 grid of 0.5 m cells).
+#
+#   maze_experiments config create use_case_5x5.yaml
+#   maze_experiments run "5x5, 2 exits" --cpus 6 --memory 8G
+#
+# Any maze parameter can be a list to sweep it (FR3), for example
+#   exits: [1, 2, 3, 4]
+# gives one maze set per value.
+name: 5x5, 2 exits
+description: Use case 2.3.1 at reduced size (10 runs).
+robot_profile: burger
+
+run_limits:
+  sim_timeout_s: 900        # BR5, sim time
+  startup_timeout_s: 120    # BR3, wall time
+  stall_window_s: 120       # BR7, sim time without 0.05 m² of new map or 0.25 m of movement
+  stall_min_area_m2: 0.05
+  stall_min_move_m: 0.25
+  retries: 2                # BR10, for startup_failed, sim_frozen, infra_failure, interrupted
+  min_rtf: 0.8              # CR5
+
+recording:
+  profile: full             # full | metrics_only (drops /scan and /imu)
+  retention: all            # all | failures | none
+
+analysis:
+  exit_match_tolerance_m: null   # null: one cell pitch
+
+maze_sets:
+  - name: 5x5-2exits
+    maze:
+      width: 5.0
+      length: 5.0
+      corridor_width: 0.48
+      wall_thickness: 0.02
+      wall_height: 0.30
+      exits: 2
+      min_exit_separation: 2
+      start: fixed            # fixed | random
+      start_cell: [0, 0]      # [column, row]; row 0 is the top
+      loop_fraction: 0.0
+    mazes: 10
+    repeats: 1
+    seed: 1
+    # stack_params:           # FR8: other parameter files for this set
+    #   explore_params: my_explore.yaml
